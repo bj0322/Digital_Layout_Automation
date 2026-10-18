@@ -1,0 +1,31 @@
+{
+  "name": "ihp_sg13g2",
+  "comment": "IHP SG13G2 open PDK (Apache-2.0), https://github.com/IHP-GmbH/IHP-Open-PDK. Set PDK_ROOT to the folder that contains ihp-sg13g2/.",
+  "files": {
+    "lef": ["${PDK_ROOT}/ihp-sg13g2/libs.ref/sg13g2_stdcell/lef/sg13g2_stdcell.lef"],
+    "gds": "${PDK_ROOT}/ihp-sg13g2/libs.ref/sg13g2_stdcell/gds/sg13g2_stdcell.gds",
+    "verilog": "${PDK_ROOT}/ihp-sg13g2/libs.ref/sg13g2_stdcell/verilog/sg13g2_stdcell.v"
+  },
+  "manufacturing_grid": 0.005,
+  "site": "CoreSite",
+  "power": {"vdd": "VDD", "vss": "VSS"},
+  "layers": {
+    "pin":        {"lef": "Metal1", "gds": [8, 0],  "text": [8, 25],  "width": 0.16, "space": 0.18, "min_area": 0.09,
+                   "wide_space": [[0.30, 1.0, 0.22], [10.0, 10.0, 0.60]]},
+    "vertical":   {"lef": "Metal2", "gds": [10, 0], "text": [10, 25], "width": 0.20, "space": 0.21, "min_area": 0.144,
+                   "wide_space": [[0.39, 1.0, 0.24], [10.0, 10.0, 0.60]]},
+    "horizontal": {"lef": "Metal3", "gds": [30, 0], "text": [30, 25], "width": 0.20, "space": 0.21, "min_area": 0.144,
+                   "wide_space": [[0.39, 1.0, 0.24], [10.0, 10.0, 0.60]]},
+    "via1": {"lef": "Via1", "gds": [19, 0], "size": 0.19, "space": 0.22, "enc_below": [0.01, 0.05], "enc_above": [0.005, 0.05]},
+    "via2": {"lef": "Via2", "gds": [29, 0], "size": 0.19, "space": 0.22, "enc_below": [0.005, 0.05], "enc_above": [0.005, 0.05]},
+    "boundary": [189, 4]
+  },
+  "rules": {"via_stack": true},
+  "cells": {
+    "inv":   "sg13g2_inv_1",
+    "nand2": "sg13g2_nand2_1",
+    "nor2":  "sg13g2_nor2_1",
+    "nor3":  "sg13g2_nor3_1",
+    "fill":  ["sg13g2_fill_1", "sg13g2_fill_2", "sg13g2_fill_4", "sg13g2_fill_8"]
+  }
+}

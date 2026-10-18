@@ -1,2 +1,210 @@
-# Digital_Layout_Automation
-CMOS-based Digital Layout Automation
+# Digital_Layout_Auto
+
+**PDK-agnostic generators for placed-and-routed digital block layouts built from
+standard cells.** Describe your PDK once in a small JSON *tech file*; each block
+type is a single Python function that returns a block that is already placed,
+routed and ready to stream out to GDS.
+
+| Block | Function | Status |
+|---|---|---|
+| N → 2^N decoder (optional enable) | `dla.blocks.make_decoder(n_bits, enable=False)` | ✅ 4–10 bits |
+| MUX, register file, shift register, … | `make_...` | planned |
+
+No PDK data is included. A ready-made tech file is provided for the open
+[IHP SG13G2](https://github.com/IHP-GmbH/IHP-Open-PDK) PDK; for any other library
+write your own (see [`tech/TECH_FILE.md`](tech/TECH_FILE.md)).
+
+---
+
+## Quick start (IHP SG13G2 example)
+
+```bash
+pip install klayout          # GDS / connectivity / DRC / PNG steps (or use --no-gds)
+git clone --depth 1 https://github.com/IHP-GmbH/IHP-Open-PDK.git
+export PDK_ROOT=$PWD/IHP-Open-PDK
+
+python gen.py --tech tech/ihp_sg13g2.json decoder --bits 8 --enable   # -> out/dec8to256en/
+export DLA_TECH=tech/ihp_sg13g2.json
+python gen.py decoder --bits 10 --name row_dec
+python -m pytest -q tests                                             # 18 tests
+```
+
+From Python:
+
+```python
+from dla import make_decoder, write_all
+from dla.tech import load
+
+tech = load("tech/ihp_sg13g2.json")
+blk = make_decoder(6, enable=True, tech=tech)   # placed + routed Block
+print(blk.stats())                              # cells, fill, shapes, vias, size (um)
+write_all(blk, "out/dec6to64en")                # JSON, layout netlist, RTL, testbench
+```
+
+Example run:
+
+```
+[tech] ihp_sg13g2: site 0.480 x 3.780, grid 0.480 x 0.500 (x offset 0.000), cells inv=sg13g2_inv_1, ...
+[gen ] dec8to256en: 313 cells (+118 fill), 42.7 x 83.9 um, 6151 shapes, 1419 vias  (0.2s)
+[sim ] exhaustive gate-level check: PASS
+[gds ] out/dec8to256en/dec8to256en.gds (43.2 x 83.9 um)
+[conn] 2063 probes: missing 0, opens 0, shorts 0 -> PASS
+[drc ] metal/via rules: 0 violations
+RESULT: PASS
+```
+
+### Outputs (`out/<block>/`)
+
+| File | Contents |
+|---|---|
+| `<top>.json` | Block JSON: instances, routing shapes, vias, pins, layer map |
+| `<top>_layout.v` | Structural netlist with exactly the connectivity drawn in the layout |
+| `<top>_rtl.v`, `<top>_tb.v` | Behavioural reference model and an exhaustive testbench |
+| `<top>.gds` | Final GDS (std cells instantiated by name from the library GDS) |
+| `overview.png`, `predecoder.png`, `array_corner.png` | Layout snapshots |
+
+### Built-in checks
+
+1. **Gate-level simulation** in pure Python: every address, with EN = 0 and 1.
+2. **Metal-level connectivity**: pin-layer/via1/vertical/via2/horizontal nets are
+   extracted from the GDS and compared with the intended nets (opens, shorts,
+   missing metal at pins, rails and labels).
+3. **Metal/via DRC** driven by the tech file: width, spacing, wide-metal spacing with
+   parallel run length, minimum area, via size and spacing, rectangular via
+   enclosure, via keep-outs and stacking.
+
+These are fast sanity checks, not sign-off. Always run your PDK's own DRC/LVS deck
+on the GDS (the generated `_tb.v` runs with your library's Verilog models).
+
+---
+
+## Using another PDK
+
+1. Copy `tech/ihp_sg13g2.json`, fill in your LEF/GDS paths, GDS layer numbers, the
+   rules of the three metals and two vias, and the cell names for the roles
+   `inv`, `nand2`, `nor2`, `nor3` and `fill`.
+   Keep tech files for proprietary PDKs outside the repository (or under `local/`,
+   which git ignores).
+2. `python gen.py --tech local/my_pdk.json decoder --bits 4` — the `[tech]` line shows
+   the derived site, routing grid and track offset; the run fails early with a clear
+   message if a pin cannot be reached on the track grid.
+3. Run your PDK's sign-off DRC on the produced GDS.
+
+Requirements on the library and the full schema are in
+[`tech/TECH_FILE.md`](tech/TECH_FILE.md).
+
+### Validation
+
+| PDK | What was checked | Result |
+|---|---|---|
+| IHP SG13G2 (open) | all 14 decoders (4–10 bits, EN on/off): built-in checks, **official IHP KLayout DRC deck** (FEOL + BEOL, density excluded), Icarus Verilog with the IHP cell models | all clean / PASS |
+
+---
+
+## Decoder architecture
+
+The `n` address bits are split into `na = n // 2` row bits (`A[na-1:0]`) and
+`nb = n - na` column bits (`A[n-1:na]`), giving `R = 2^na` rows × `C = 2^nb` columns.
+
+- **Predecoders**: a k-bit group is split into `lo = k // 2` and `hi = k - lo` bits;
+  each sub-group is decoded with nor2/nor3 of true/inverted literals (a 1-bit
+  sub-group needs no gate) and combined by nand2 into the active-low `pa_n[R]`
+  (rows) and `pb_n[C]` (columns).
+- **Array**: `Y[c·R + r] = nor2(pa_n[r], pb_n[c])`.
+- **Enable**: `ENn` becomes one more input of the column group's low sub-predecoder
+  (nor2 → nor3); EN = 0 forces every `pb_n` high, so every Y is 0.
+- Only nor2/nor3 are needed, so a group has at most 5 bits → **n = 4 … 10**.
+
+### Floorplan
+
+`H` = row height, `y = 0` is the bottom of the array.
+
+```
+ y = R*H   +-------+---------+--------------------------------+-------+
+           | strap | channel | row nand2 | nor2 x C           | strap |  <- R rows, R0/MX alternating
+           |  VDD  |         |           | one horizontal wire|  VDD  |     (rails shared)
+ y = 0     |  VSS  |         +--------------------------------+  VSS  |
+ y = -H    |       |         |  column nand2 x C              |       |  <- one vertical wire / column
+ y = -3H   |       |  column predecoder row (inv, nor, [EN])  |       |
+ y = -5H   |       |  row predecoder row                      |       |
+ y = -6H   +-------+---- inputs A[*], EN, VDD, VSS (bottom edge) -----+
+```
+
+- **Regular wiring is drawn directly**: one horizontal-layer wire per row joins the
+  row nand2 output to all nor2 A pins; each column nand2 is shifted so its output
+  lands on the B-pin track of its array column, so one vertical wire feeds the
+  whole column.
+- **Everything else** (literals, predecoded signals, inputs) is routed by an
+  **A\* maze router** on the derived grid (vertical layer on tracks, horizontal layer
+  on grid lines). The grid guarantees that different nets on neighbouring nodes are
+  DRC clean, so the router only tracks node ownership.
+- **Power**: vertical-layer straps over filler columns at both ends, VIA1 onto every
+  row rail.
+- **Auto-retry**: if routing fails, the left channel is widened and the block is
+  regenerated.
+- **Outputs** `Y[*]` are in-block pins on the vertical layer at each nor2 output — the
+  block is a macro meant to abut a memory array or word-line driver column.
+
+### Sizes on IHP SG13G2
+
+| Block | Logic cells | W × H (µm) |
+|---|---|---|
+| dec4to16 | 28 | 17.8 × 38.5 |
+| dec6to64 | 94 | 26.4 × 53.6 |
+| dec8to256 / en | 312 / 313 | 42.7 × 83.9 |
+| dec10to1024 / en | 1122 / 1123 | 75.4 × 144.3 |
+
+---
+
+## Repository layout
+
+```
+dla/
+  tech.py         tech-file loader: LEF parser, derived routing grid, automatic pin access
+  layout.py       Block: rows and placement by logic role, wiring helpers, power straps,
+                  A* maze router, filler insertion
+  blocks/
+    decoder.py    make_decoder()            <- one file / function per block type
+  export.py       block JSON, structural Verilog, RTL, testbench
+  sim.py          pure-Python gate-level simulator (exhaustive checks)
+  gds.py          KLayout back end: GDS build, connectivity, tech-driven DRC, PNG
+gen.py            command-line interface
+tech/             tech-file reference and the IHP SG13G2 example
+klayout_scripts/  wrappers for the KLayout application (klayout -b -r ...)
+tests/            pytest suite (needs DLA_TECH)
+```
+
+### Adding a block type
+
+1. Create `dla/blocks/<block>.py` with `make_<block>(..., tech=None) -> Block`:
+   create a `Block` → `add_row` / `place(name, role, site, row, pins)` → draw fixed
+   wiring → `power_straps` → `maze_route` → `fill_rows`, then set `ports`,
+   `boundary` and `meta["block"]`. Use logic roles, never cell names.
+2. If it needs a new logic role (e.g. `dff`), add it to `Tech.ROLES`, `sim.GATES`
+   and the tech files.
+3. Register it in `BLOCKS` (`dla/blocks/__init__.py`), add a `gen.py` sub-command,
+   a functional check and tests.
+
+---
+
+## Limitations
+
+- No timing analysis. In large decoders one nand2 drives a whole row of nor2s
+  through a long horizontal wire; add buffering if row delay matters.
+- Built-in DRC covers the three metals and two vias only; front-end, density and
+  antenna rules need the PDK deck.
+- No transistor-level LVS: connectivity is compared at metal level; std-cell
+  internals are assumed correct.
+- Libraries that need explicit well-tap cells are not supported yet.
+
+## Requirements
+
+- Python ≥ 3.8
+- `klayout` Python package ≥ 0.28 for the GDS steps (optional with `--no-gds`)
+- `pytest` for the tests
+
+## License
+
+MIT License, Copyright (c) 2026 Beomjoon Kim. See [LICENSE](LICENSE).
+The example tech file `tech/ihp_sg13g2.json` only references the IHP SG13G2 PDK,
+which is distributed separately by IHP under the Apache License 2.0.

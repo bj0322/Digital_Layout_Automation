@@ -1,0 +1,1 @@
+klayout>=0.28   # GDS build / connectivity / DRC subset / PNG (optional with --no-gds)
