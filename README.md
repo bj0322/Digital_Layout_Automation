@@ -144,7 +144,9 @@ ships none still gets the decoder (and future blocks).
 | inv_1 / inv_2 | 3 / 5 | | nor2_1 / nor3_1 | 4 / 6 |
 | nand2_1 / nand3_1 | 4 / 6 | | and2_1 / aoi21_1 | 6 / 6 |
 
-inv_1 and nand2_1 match the widths of the IHP library cells. A dec6to64en built from
+inv_1 and nand2_1 match the widths of the IHP library cells. The generator has also been
+run on a second, proprietary bulk-CMOS PDK (not included) that forbids VIA1 near contacts
+and stacked vias: the library and a decoder built from it were DRC clean there too. A dec6to64en built from
 the generated cells passes the gate-level, connectivity, metal and front-end checks.
 
 ## Decoder architecture

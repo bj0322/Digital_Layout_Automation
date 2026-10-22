@@ -137,8 +137,14 @@ def write_lef(path, st, cells):
             L += ["        RECT %.3f %.3f %.3f %.3f ;" % r for r, n in m1 if n == p]
             L += ["    END", "  END %s" % p]
         obs = [r for r, n in m1 if n not in cl.pins]
-        if obs:
-            L += ["  OBS", "    LAYER %s ;" % st.m1.lef] + ["      RECT %.3f %.3f %.3f %.3f ;" % r for r in obs]
+        conts = [r for l, r, n in cl.rects if l == "cont"] if st.v1_cont_space else []
+        if obs or conts:
+            L.append("  OBS")
+            if obs:
+                L += ["    LAYER %s ;" % st.m1.lef] + ["      RECT %.3f %.3f %.3f %.3f ;" % r for r in obs]
+            if conts:      # contacts block VIA1 (keep-out rule of the PDK)
+                L += ["    LAYER %s SPACING %g ;" % (st.v1.lef, st.v1_cont_space)]
+                L += ["      RECT %.3f %.3f %.3f %.3f ;" % r for r in conts]
             L.append("  END")
         L += ["END %s" % cl.name, ""]
     L.append("END LIBRARY")

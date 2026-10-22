@@ -118,6 +118,11 @@ grid from `grid`.
 }
 ```
 
+If `layers.via1_keepout` names the contact layer, the generator keeps every pin access
+via that far from contacts, puts the tap contacts halfway between vertical-layer tracks
+(so power-strap vias on the rails clear them) and reports all contacts as VIA1
+obstructions in the LEF.
+
 The run prints the derived template (`[std ]` line: band positions, n-well edge,
 poly-contact window, gate pitches) and fails early if the row height cannot hold
 `wn` / `wp`. It writes `<lib>.tech.json`, a copy of the tech file pointing at the new

@@ -62,8 +62,17 @@ def template(st, name, nsites):
     cl.add("m1", R(0, H - st.rail_w / 2, W, H + st.rail_w / 2), st.vdd)
     cl.add("activ", R(0, -th / 2, W, th / 2), st.vss)
     cl.add("activ", R(0, H - th / 2, W, H + th / 2), st.vdd)
-    for k in range(nsites):
-        x = (k + 0.5) * st.site_w
+    # tap contacts halfway between vertical-layer tracks, so power-strap vias on the rails
+    # never land on them (matters when the PDK forbids VIA1 near contacts)
+    edge = c / 2 + st.r["cont_activ_enc"]
+    k = int(math.floor(-st.x_off / st.gx)) - 1
+    while True:
+        x = r6(st.x_off + st.gx * (k + 0.5))
+        k += 1
+        if x > W - edge + EPS:
+            break
+        if x < edge - EPS:
+            continue
         for y, net in ((0.0, st.vss), (H, st.vdd)):
             cl.add("cont", R(x - c / 2, y - c / 2, x + c / 2, y + c / 2), net)
     px = st.pimp_x
@@ -176,7 +185,9 @@ class Geo:
         if ox > EPS and oy > EPS:
             return same
         if ox > -EPS and oy > -EPS:
-            return same and max(ox, oy) >= self.w - EPS
+            # touching shapes of one net merge; a real neck would be a width error, which the
+            # KLayout DRC (width check on merged metal) reports
+            return same
         gap = math.hypot(max(0.0, -ox), max(0.0, -oy))
         if gap >= self.need(a, b, ox, oy) - EPS:
             return True
@@ -190,6 +201,14 @@ class Geo:
         box = (gx0, gy0, gx1, gy1)
         near = [r for r in fill if r[0] < box[2] + EPS and r[2] > box[0] - EPS and r[1] < box[3] + EPS and r[3] > box[1] - EPS]
         return bool(near) and inside_union(box, near)
+
+
+def _overlap(a, b):
+    return min(a[2], b[2]) - max(a[0], b[0]) > EPS and min(a[3], b[3]) - max(a[1], b[1]) > EPS
+
+
+def _dist(a, b):
+    return math.hypot(max(0.0, max(a[0], b[0]) - min(a[2], b[2])), max(0.0, max(a[1], b[1]) - min(a[3], b[3])))
 
 
 def poly_ok(st, a, b):
@@ -285,7 +304,8 @@ class Router:
                     poly, m1 = self.gate_pad(gi, y, xc, rot)
                     if not all(poly_ok(st, poly, q) for k, q in self.poly_others(gi)):
                         break
-                    if self.legal(m1, net):
+                    c = st.r["cont_size"] / 2
+                    if self.legal(m1, net) and self.cont_clear(R(xc - c, y - c, xc + c, y + c)):
                         out[(self.ix[xc], j)] = ("gate", gi, y, xc, rot)
                         break
         return out
@@ -306,9 +326,26 @@ class Router:
                 continue
             for j, y in enumerate(self.ys):
                 a = R(x - self.apad[0] / 2, y - self.apad[1] / 2, x + self.apad[0] / 2, y + self.apad[1] / 2)
-                if self.legal(a, net):
+                if self.legal(a, net) and self.via_clear(x, y):
                     out[(self.ix[x], j)] = ("io", x, y)
         return out
+
+    def _via(self, x, y):
+        v = self.st.v1.size / 2
+        return R(x - v, y - v, x + v, y + v)
+
+    def via_clear(self, x, y):
+        """A VIA1 at (x, y) keeps the via1-contact keep-out."""
+        sp = self.st.v1_cont_space
+        if not sp:
+            return True
+        via = self._via(x, y)
+        return all(_dist(via, r) >= sp - EPS for l, r, n in self.cl.rects if l == "cont")
+
+    def cont_clear(self, cont):
+        """A new contact keeps the keep-out to the access vias placed so far."""
+        sp = self.st.v1_cont_space
+        return not sp or all(_dist(cont, self._via(x, y)) >= sp - EPS for x, y in self.cl.access.values())
 
     def commit_terminal(self, net, term):
         st = self.st
@@ -361,7 +398,11 @@ class Router:
             if not targets:
                 return False
             sources = tree if src_virtual is None else set(src_virtual)
-            path = self._astar(net, sources, targets)
+            accept = None
+            if src_virtual is not None and self.st.v1_cont_space:
+                # both ends are still free: a poly contact and an access via must keep the keep-out
+                accept = lambda root, goal: self._pair_ok(src_virtual[root], targets[goal][1])
+            path = self._astar(net, sources, targets, accept)
             if path is None:
                 return False
             if src_virtual is not None:
@@ -381,12 +422,22 @@ class Router:
             return False
         return True
 
+    def _pair_ok(self, a, b):
+        """A poly contact and an access via picked in the same step keep the via1-contact keep-out."""
+        sp = self.st.v1_cont_space
+        if not sp or a is None or b is None:
+            return True
+        c = self.st.r["cont_size"] / 2
+        conts = [R(t[3] - c, t[2] - c, t[3] + c, t[2] + c) for t in (a, b) if t[0] == "gate"]
+        vias = [self._via(t[1], t[2]) for t in (a, b) if t[0] == "io"]
+        return all(_dist(cr, v) >= sp - EPS for cr in conts for v in vias)
+
     def _cands(self, net, t):
         if t[0] == "gate":
             return self.gate_candidates(t[1], net)
         return self.io_candidates(net)
 
-    def _astar(self, net, sources, targets):
+    def _astar(self, net, sources, targets, accept=None):
         NX, NY = len(self.xs), len(self.ys)
         tg = list(targets)
 
@@ -416,13 +467,13 @@ class Router:
             f, g, u = heapq.heappop(pq)
             if g > dist.get(u, 1e18) + EPS:
                 continue
-            if u in targets and u not in sources:
+            if u in targets:
                 path = [u]
                 while path[-1] in prev:
                     path.append(prev[path[-1]])
-                return path[::-1]
-            if u in targets:                      # a source that is itself a target
-                return [u]
+                path.reverse()
+                if accept is None or accept(path[0], u):
+                    return path
             i, j = u
             for v in ((i + 1, j), (i - 1, j), (i, j + 1), (i, j - 1)):
                 if not (0 <= v[0] < NX and 0 <= v[1] < NY):
@@ -505,8 +556,11 @@ def _attempt(st, cn, seq, extra_sites, cont_max, net_order_shift):
     w = st.m1.width
     tracks = [r6(st.x_off + st.gx * n) for n in range(int(W / st.gx) + 2)
               if EPS < st.x_off + st.gx * n < W - EPS]
-    xs = sorted({e["x"] for e in elems if "x" in e} | set(tracks))
-    xs = [x for x in xs if st.m1_edge + w / 2 - EPS <= x <= W - st.m1_edge - w / 2 + EPS]
+    lo, hi = r6(st.m1_edge + w / 2), r6(W - st.m1_edge - w / 2)
+    xs = sorted({e["x"] for e in elems if "x" in e} | set(tracks) | {lo, hi})
+    xs = [x for x in xs if lo - EPS <= x <= hi + EPS]
+    # extra columns between distant ones (room to pass beside pads near the cell edge)
+    xs = sorted(set(xs) | {snap((a + b) / 2, st.mfg) for a, b in zip(xs, xs[1:]) if b - a > w + st.m1.space})
     step = snap((w + st.m1.space) / 4, st.mfg)
     ny = int(math.floor((st.m1_yhi - st.m1_ylo) / step + EPS)) + 1
     ys = [r6(st.m1_ylo + step * j) for j in range(ny)]

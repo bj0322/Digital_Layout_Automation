@@ -88,6 +88,10 @@ class StdTech:
         self.lay.setdefault("pin", None)
         if L.get("boundary") and not self.lay.get("boundary"):
             self.lay["boundary"] = tuple(L["boundary"])
+        # VIA1 keep-out from contacts (layers.via1_keepout of the block tech): pin access vias
+        # must keep it, and the LEF reports every contact as a VIA1 obstruction
+        self.v1_cont_space = max([float(v["space"]) for v in L.get("via1_keepout", {}).values()
+                                  if tuple(v["gds"]) == self.lay["cont"]] or [0.0])
         r = s["rules"]
         missing = [k for k in RULES if k not in r]
         if missing:

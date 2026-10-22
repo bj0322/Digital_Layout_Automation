@@ -22,6 +22,9 @@ from dla.tech import load
 
 
 def main(argv=None):
+    for f in (sys.stdout, sys.stderr):      # non-ASCII paths (e.g. Korean folders) in logs
+        if not f.isatty() and hasattr(f, "reconfigure"):
+            f.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tech", help="tech JSON file (default: $DLA_TECH), see tech/TECH_FILE.md")
     ap.add_argument("--out", default="out", help="output root (a sub-folder per block is created)")
@@ -122,6 +125,17 @@ def stdcell(a):
     print("[lvs ] device extraction vs SPICE: %s" % ("PASS" if not nfail else "%d cells FAIL" % nfail))
     ok &= nfail == 0
     if "tech" in p:
+        from dla.tech import Tech
+        bt = Tech(p["tech"])        # the block router must reach every pin on its own track
+        bad = []
+        for cl in lib["cells"]:
+            if cl.netlist is not None:
+                try:
+                    bt.access(cl.name)
+                except RuntimeError as e:
+                    bad.append(str(e))
+        print("[pins] block-router access (VIA1 on tracks): %s" % ("PASS" if not bad else "; ".join(bad)))
+        ok &= not bad
         print("[tech] %s  (use with --tech to build blocks from these cells)" % p["tech"])
     print("RESULT: %s" % ("PASS" if ok else "FAIL"))
     return 0 if ok else 1

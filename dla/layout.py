@@ -441,6 +441,44 @@ class Block:
                 tree.add((V, t[2], j))
         return edges, sorted(vias), tl
 
+    # ------------------------------------------------------------------ clean-up
+    def fill_notches(self):
+        """Close gaps narrower than the spacing between shapes of one net on one track.
+
+        Via pads of the same net on neighbouring grid nodes (or a pin via next to a grid
+        node) can leave a notch when the pad is taller than the pitch allows. The filler
+        has the narrower pad's width, so it keeps the clearance the pads already have.
+        """
+        if getattr(self, "_notches_filled", False):
+            return
+        self._notches_filled = True
+        for layer, rule, vert in (("m2", self.t.m2, True), ("m3", self.t.m3, False)):
+            by = {}
+            for lay, x1, y1, x2, y2, net in self.shapes:
+                if lay == layer:
+                    by.setdefault(net, []).append((x1, y1, x2, y2))
+            for net, rs in by.items():
+                rs.sort(key=lambda r: r[1] if vert else r[0])
+                for i, a in enumerate(rs):
+                    for b in rs[i + 1:]:
+                        if vert:
+                            lo, hi = max(a[0], b[0]), min(a[2], b[2])
+                            gap0, gap1 = min(a[3], b[3]), max(a[1], b[1])
+                        else:
+                            lo, hi = max(a[1], b[1]), min(a[3], b[3])
+                            gap0, gap1 = min(a[2], b[2]), max(a[0], b[0])
+                        if hi - lo < rule.width - EPS or not (EPS < gap1 - gap0 < rule.space - EPS):
+                            continue
+                        if any((r[0] <= lo + EPS and r[2] >= hi - EPS and r[1] <= gap0 + EPS and r[3] >= gap1 - EPS)
+                               if vert else
+                               (r[1] <= lo + EPS and r[3] >= hi - EPS and r[0] <= gap0 + EPS and r[2] >= gap1 - EPS)
+                               for r in rs):
+                            continue
+                        if vert:
+                            self.rect(layer, lo, gap0, hi, gap1, net)
+                        else:
+                            self.rect(layer, gap0, lo, gap1, hi, net)
+
     # ------------------------------------------------------------------ summary
     def stats(self):
         logic = [i for i in self.insts if self.roles.get(i[0]) in self.t.cells]

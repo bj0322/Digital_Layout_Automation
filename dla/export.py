@@ -9,6 +9,7 @@ import os
 
 def block_json(blk):
     t = blk.t
+    blk.fill_notches()
     return {
         "top": blk.name,
         "tech": t.name,
