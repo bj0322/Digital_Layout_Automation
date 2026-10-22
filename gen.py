@@ -3,6 +3,8 @@
 
     python gen.py --tech tech/ihp_sg13g2.json decoder --bits 8 --enable   # -> out/dec8to256en/
     python gen.py decoder --bits 10 --name row_dec --no-gds              # tech from $DLA_TECH
+    python gen.py --tech tech/ihp_sg13g2.json stdcell                     # -> out/dla_lib/ (own std cells)
+    python gen.py --tech out/dla_lib/dla_lib.tech.json decoder --bits 6   # block from the generated cells
 
 Steps: place + route -> block JSON / layout netlist / RTL / testbench
        -> exhaustive Python gate sim -> GDS -> metal connectivity -> metal/via DRC -> PNG
@@ -32,7 +34,14 @@ def main(argv=None):
     d.add_argument("--name", help="top cell / module name")
     d.add_argument("--channel", type=int, help="extra routing tracks in the left channel")
 
+    s = sub.add_parser("stdcell", help="generate a std-cell library from the tech file's front-end rules")
+    s.add_argument("--name", default="dla_lib", help="library name (output folder and file names)")
+    s.add_argument("--prefix", default="dla_", help="cell name prefix")
+    s.add_argument("--cells", nargs="+", help="cells to build, e.g. inv_1 nand2_1 (default: all)")
+
     a = ap.parse_args(argv)
+    if a.block == "stdcell":
+        return stdcell(a)
     tech = load(a.tech)
     print("[tech] " + tech.summary())
     t0 = time.time()
@@ -74,6 +83,46 @@ def main(argv=None):
             gds.render_png(out_gds, os.path.join(outdir, zname + ".png"), dj, box=box, width=1400)
         print("[png ] %s" % outdir)
 
+    print("RESULT: %s" % ("PASS" if ok else "FAIL"))
+    return 0 if ok else 1
+
+
+def stdcell(a):
+    """Generate the library, then switch-level (inside make_library), DRC and LVS checks."""
+    from dla.stdcell import make_library
+    t0 = time.time()
+    lib = make_library(a.tech or os.environ.get("DLA_TECH"), os.path.join(a.out, a.name), a.name, a.prefix, a.cells)
+    p, st = lib["paths"], lib["st"]
+    print("[lib ] %s: %d cells -> %s  (%.1fs)" % (a.name, len(lib["cells"]), os.path.dirname(p["gds"]), time.time() - t0))
+    print("[sim ] switch-level truth tables: PASS")
+    ok = True
+    if a.no_gds:
+        print("RESULT: PASS (DRC / LVS skipped)")
+        return 0
+    try:
+        from dla.stdcell import check
+    except ImportError:
+        sys.exit("klayout Python package not found: pip install klayout  (or use --no-gds)")
+    bad = {}
+    for name in [c.name for c in lib["cells"]] + [a.name + "_test"]:
+        v = check.drc(p["gds"], name, st)
+        if v:
+            bad[name] = v
+    print("[drc ] front-end + metal-1 rules, %d cells + abutment test: %s"
+          % (len(lib["cells"]), "0 violations" if not bad else bad))
+    ok &= not bad
+    nfail = 0
+    for cl in lib["cells"]:
+        if cl.netlist is None:
+            continue
+        good, msg = check.lvs(p["gds"], cl, st, cl.netlist.spice(st.nmos, st.pmos, st.L, st.spice_units))
+        if not good:
+            nfail += 1
+            print("[lvs ] %s: %s" % (cl.name, msg))
+    print("[lvs ] device extraction vs SPICE: %s" % ("PASS" if not nfail else "%d cells FAIL" % nfail))
+    ok &= nfail == 0
+    if "tech" in p:
+        print("[tech] %s  (use with --tech to build blocks from these cells)" % p["tech"])
     print("RESULT: %s" % ("PASS" if ok else "FAIL"))
     return 0 if ok else 1
 

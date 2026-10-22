@@ -1,0 +1,21 @@
+# generated
+out/
+*.gds
+*.oas
+*.lyrdb
+*.vvp
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# PDK data must never be committed: libraries, rule decks, local tech files
+PDK/
+local/
+*.lef
+*.lib
+*.db
+*.cdl
+*.sp
+*.spi
+*.pex.netlist
+tech/*.local.json

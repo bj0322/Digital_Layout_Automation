@@ -8,6 +8,7 @@ routed and ready to stream out to GDS.
 | Block | Function | Status |
 |---|---|---|
 | N → 2^N decoder (optional enable) | `dla.blocks.make_decoder(n_bits, enable=False)` | ✅ 4–10 bits |
+| **Std-cell library** (inv, nand2/3, nor2/3, and2, aoi21, fillers) | `dla.stdcell.make_library(tech, outdir)` | ✅ transistor level |
 | MUX, register file, shift register, … | `make_...` | planned |
 
 No PDK data is included. A ready-made tech file is provided for the open
@@ -26,7 +27,9 @@ export PDK_ROOT=$PWD/IHP-Open-PDK
 python gen.py --tech tech/ihp_sg13g2.json decoder --bits 8 --enable   # -> out/dec8to256en/
 export DLA_TECH=tech/ihp_sg13g2.json
 python gen.py decoder --bits 10 --name row_dec
-python -m pytest -q tests                                             # 18 tests
+python gen.py --tech tech/ihp_sg13g2.json stdcell                     # own std cells -> out/dla_lib/
+python gen.py --tech out/dla_lib/dla_lib.tech.json decoder --bits 6   # decoder from those cells
+python -m pytest -q tests                                             # 31 tests
 ```
 
 From Python:
@@ -101,6 +104,49 @@ Requirements on the library and the full schema are in
 
 ---
 
+## Std-cell generator
+
+`python gen.py --tech <tech.json> stdcell` builds a std-cell library at transistor level
+from the front-end rules in the tech file's `stdcell` section (see
+[`tech/TECH_FILE.md`](tech/TECH_FILE.md)). No std-cell library is needed, so a PDK that
+ships none still gets the decoder (and future blocks).
+
+```
+[cell] dla_inv_1      3 sites (1.44 um), 2 devices, gate order A
+[cell] dla_nand2_1    4 sites (1.92 um), 4 devices, gate order A B
+[cell] dla_nor3_1     6 sites (2.88 um), 6 devices, gate order C B A
+...
+[sim ] switch-level truth tables: PASS
+[drc ] front-end + metal-1 rules, 12 cells + abutment test: 0 violations
+[lvs ] device extraction vs SPICE: PASS
+[tech] out/dla_lib/dla_lib.tech.json  (use with --tech to build blocks from these cells)
+```
+
+1. **Netlist**: each cell is a list of static CMOS stages, a series/parallel pull-down
+   expression per stage; the pull-up is its dual. An exhaustive switch-level simulation
+   checks every network against its truth table.
+2. **Gate order**: dynamic programming over common Euler trails of the NMOS and PMOS
+   diffusion graphs (same gate order in both rows, fewest diffusion breaks).
+3. **Template** (derived from the rules): p+ tap / VSS rail, NMOS band, channel with the
+   poly-contact window, PMOS band in the n-well, n+ tap / VDD rail. Cells abut in
+   R0/MX rows like any library.
+4. **Placement + routing**: vertical poly columns at contacted / uncontacted pitch;
+   metal-1 straps over contacted diffusion; an A\* router with geometric legality
+   (spacing, wide spacing, notches, min area) wires the rest on metal 1 and gives every
+   pin an access pad around a VIA1 on the block router's track grid.
+5. **Views**: `<lib>.gds` (pure-Python writer, plus an abutment test cell), `.lef`,
+   `.spice`, `.v` and `<lib>.tech.json` for the block generators.
+6. **Checks** (KLayout): front-end + metal-1 DRC from the tech-file rules, and LVS
+   (MOS extraction, compared with the SPICE netlist including W/L and pin names).
+
+| Cell (IHP SG13G2 rules) | Sites | | Cell | Sites |
+|---|---|---|---|---|
+| inv_1 / inv_2 | 3 / 5 | | nor2_1 / nor3_1 | 4 / 6 |
+| nand2_1 / nand3_1 | 4 / 6 | | and2_1 / aoi21_1 | 6 / 6 |
+
+inv_1 and nand2_1 match the widths of the IHP library cells. A dec6to64en built from
+the generated cells passes the gate-level, connectivity, metal and front-end checks.
+
 ## Decoder architecture
 
 The `n` address bits are split into `na = n // 2` row bits (`A[na-1:0]`) and
@@ -165,6 +211,9 @@ dla/
                   A* maze router, filler insertion
   blocks/
     decoder.py    make_decoder()            <- one file / function per block type
+  stdcell/        std-cell generator: rules (template), netlist (networks, switch sim),
+                  euler (gate order), cell (placement + metal-1 router), writers
+                  (GDS/LEF/SPICE/Verilog/tech), check (KLayout DRC + LVS), library
   export.py       block JSON, structural Verilog, RTL, testbench
   sim.py          pure-Python gate-level simulator (exhaustive checks)
   gds.py          KLayout back end: GDS build, connectivity, tech-driven DRC, PNG
@@ -188,6 +237,11 @@ tests/            pytest suite (needs DLA_TECH)
 ---
 
 ## Limitations
+
+- Std cells: no Liberty (.lib) timing characterization yet; only static CMOS cells
+  (no flip-flops, transmission gates); every transistor of a row has the same width.
+  The built-in front-end DRC covers the rules in the tech file, not antenna / density /
+  latch-up: run the PDK sign-off decks on the library.
 
 - No timing analysis. In large decoders one nand2 drives a whole row of nor2s
   through a long horizontal wire; add buffering if row delay matters.

@@ -88,3 +88,37 @@ If a library's pin names differ from `A/B/C/Y`, give the mapping under `pins`.
 
 Run `python gen.py --tech my_pdk.json decoder --bits 4` to see the derived grid
 (`[tech]` line) and check a first block.
+
+## Std-cell section (optional)
+
+Needed only for `python gen.py stdcell`, which generates the library itself. It needs
+no LEF/GDS files: `files` and `cells` may be omitted when only the generator is used.
+Metal 1 rules come from `layers.pin`, the pin access pad from `layers.via1`, the track
+grid from `grid`.
+
+```jsonc
+"stdcell": {
+  "row_height": 3.78, "site_width": 0.48, "site_name": "CoreSite",
+  "rail_width": 0.44,                       // metal-1 power rail (centred on the cell edge)
+  "layers": {"activ": [1, 0], "poly": [5, 0], "cont": [6, 0], "nwell": [31, 0],
+             "pimp": [14, 0],               // p+ implant
+             "nimp": null,                  // n+ implant layer if the PDK draws one
+             "pin": [8, 2], "boundary": [189, 4]},
+  "devices": {"nmos": "sg13_lv_nmos", "pmos": "sg13_lv_pmos",   // SPICE model names
+              "l": 0.13, "wn": 0.74, "wp": 1.12},
+  "rules": {
+    "activ_width": 0.15, "activ_space": 0.21,
+    "poly_width": 0.13, "poly_space": 0.18, "poly_endcap": 0.18, "poly_activ_space": 0.07,
+    "cont_size": 0.16, "cont_space": 0.18, "cont_activ_enc": 0.07, "cont_poly_enc": 0.07,
+    "cont_gate_space": 0.11, "polycont_activ_space": 0.14, "m1_cont_enc": [0.0, 0.05],
+    "nwell_enc_pdiff": 0.31, "nwell_space_ndiff": 0.31, "nwell_enc_ntap": 0.24, "nwell_space_ptap": 0.24,
+    "pimp_enc_pdiff": 0.18, "pimp_space_ndiff": 0.18, "pimp_enc_ptap": 0.03, "pimp_space_ntap": 0.03,
+    "pimp_enc_gate": 0.30, "pimp_space_gate": 0.30, "pimp_cont_space": 0.09
+  }
+}
+```
+
+The run prints the derived template (`[std ]` line: band positions, n-well edge,
+poly-contact window, gate pitches) and fails early if the row height cannot hold
+`wn` / `wp`. It writes `<lib>.tech.json`, a copy of the tech file pointing at the new
+LEF/GDS with the `inv`/`nand2`/`nor2`/`nor3`/`fill` roles filled in.
