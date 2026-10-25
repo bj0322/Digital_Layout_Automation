@@ -29,7 +29,7 @@ export DLA_TECH=tech/ihp_sg13g2.json
 python gen.py decoder --bits 10 --name row_dec
 python gen.py --tech tech/ihp_sg13g2.json stdcell                     # own std cells -> out/dla_lib/
 python gen.py --tech out/dla_lib/dla_lib.tech.json decoder --bits 6   # decoder from those cells
-python -m pytest -q tests                                             # 55 tests
+python -m pytest -q tests                                             # 65 tests
 ```
 
 From Python:
@@ -216,8 +216,9 @@ dla/
   stdcell/        std-cell generator: rules (template), netlist (networks, switch sim),
                   euler (gate order), cell (placement + metal-1 router), writers
                   (GDS/LEF/SPICE/Verilog/tech), check (KLayout DRC + LVS), library
-  db/             design database for the netlist flow: Library (LEF), Design (netlist,
-                  placement, routing), DEF read/write, structural Verilog read/write
+  db/             design database for the netlist flow: Library (LEF + Liberty timing),
+                  Design (netlist, placement, routing), DEF read/write, structural Verilog
+                  read/write, Liberty read/write with NLDM lookup
   export.py       block JSON, structural Verilog, RTL, testbench
   sim.py          pure-Python gate-level simulator (exhaustive checks)
   gds.py          KLayout back end: GDS build, connectivity, tech-driven DRC, PNG
@@ -243,7 +244,8 @@ tests/            pytest suite (needs DLA_TECH)
 
 ## Limitations
 
-- Std cells: no Liberty (.lib) timing characterization yet; only static CMOS cells
+- Std cells: no Liberty (.lib) timing characterization of the generated cells yet
+  (PDK Liberty files are read by `dla.db`); only static CMOS cells
   (no flip-flops, transmission gates); every transistor of a row has the same width.
   The built-in front-end DRC covers the rules in the tech file, not antenna / density /
   latch-up: run the PDK sign-off decks on the library.

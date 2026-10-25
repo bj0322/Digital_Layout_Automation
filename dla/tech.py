@@ -167,7 +167,10 @@ class Tech:
         self.verilog = _expand(f["verilog"], base) if f.get("verilog") else None
         tl = f.get("tech_lef", [])          # technology LEF (layers, vias): used by dla.db only
         self.tech_lef = [_expand(p, base) for p in (tl if isinstance(tl, list) else [tl])]
-        for p in self.lef + self.tech_lef + [self.gds_file]:
+        lb = f.get("liberty", {})             # Liberty per corner: used by dla.db only
+        lb = {"default": lb} if isinstance(lb, (list, str)) else lb
+        self.liberty = {c: [_expand(p, base) for p in (v if isinstance(v, list) else [v])] for c, v in lb.items()}
+        for p in self.lef + self.tech_lef + [q for v in self.liberty.values() for q in v] + [self.gds_file]:
             if not os.path.isfile(p):
                 raise FileNotFoundError("tech %s: file not found: %s" % (self.name, p))
         self.mfg = float(d.get("manufacturing_grid", 0.005))

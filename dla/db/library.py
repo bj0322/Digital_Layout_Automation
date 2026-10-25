@@ -1,4 +1,4 @@
-"""Cell library: technology and macros read from LEF (Liberty timing joins in M1).
+"""Cell library: technology and macros from LEF, timing from Liberty (one entry per corner).
 
     from dla.db import Library
     lib = Library.read_lef(["sg13g2_tech.lef", "sg13g2_stdcell.lef"])
@@ -7,6 +7,9 @@
     m.w, m.h, m.pins["Y"].direction, m.pins["Y"].rects()
 
     lib = Library.from_tech(tech)   # dla.tech.Tech: files.tech_lef (optional) + files.lef
+                                    # + files.liberty (first corner; corners=[...] for more)
+    lib.timing("sg13g2_inv_1")      # LibCell of the default corner (dla.db.liberty)
+    lib.check_join()                # LEF <-> Liberty mismatches (missing cells, pins, directions)
 
 All distances in um. Rects are (x1, y1, x2, y2) in the macro frame with the LEF ORIGIN
 already applied, so (0, 0) is the macro's lower-left corner.
@@ -144,6 +147,8 @@ class Library:
         self.sites: Dict[str, Site] = {}
         self.macros: Dict[str, Macro] = {}
         self.files: List[str] = []
+        self.liberty = {}                # corner -> LibertyLib (cells of all files merged)
+        self.default_corner = None
 
     # ------------------------------------------------------------------ queries
     def layer_order(self):
@@ -164,9 +169,64 @@ class Library:
         return lib
 
     @classmethod
-    def from_tech(cls, tech):
-        """Library of a dla.tech.Tech: its technology LEF(s) (optional) and cell LEF(s)."""
-        return cls.read_lef(list(getattr(tech, "tech_lef", [])) + list(tech.lef))
+    def from_tech(cls, tech, corners=None):
+        """Library of a dla.tech.Tech: technology LEF(s) (optional), cell LEF(s) and the
+        Liberty files of `corners` (default: the first corner of files.liberty, if any)."""
+        lib = cls.read_lef(list(getattr(tech, "tech_lef", [])) + list(tech.lef))
+        libs = getattr(tech, "liberty", {})
+        if corners is None:
+            corners = list(libs)[:1]
+        for c in corners:
+            if c not in libs:
+                raise KeyError("tech %s: no Liberty corner %r (have %s)" % (tech.name, c, sorted(libs)))
+            for p in libs[c]:
+                lib.add_liberty(p, c)
+        return lib
+
+    def add_liberty(self, path, corner="default"):
+        from .liberty import read_liberty
+        ll = read_liberty(path)
+        if corner in self.liberty:
+            self.liberty[corner].cells.update(ll.cells)
+        else:
+            self.liberty[corner] = ll
+        if self.default_corner is None:
+            self.default_corner = corner
+        self.files.append(os.path.abspath(path))
+        return ll
+
+    def timing(self, cell, corner=None):
+        """Liberty cell of `cell` (None if the corner has no such cell)."""
+        ll = self.liberty.get(corner or self.default_corner)
+        return ll.cells.get(cell) if ll else None
+
+    def check_join(self, corner=None):
+        """Problems joining LEF macros and Liberty cells, as strings (empty: consistent).
+
+        Macros without signal pins (fillers, decaps, tap cells) need no timing."""
+        ll = self.liberty.get(corner or self.default_corner)
+        if ll is None:
+            return ["no Liberty loaded"]
+        out = []
+        for name, m in self.macros.items():
+            lc = ll.cells.get(name)
+            sig = {p.name: p for p in m.signal_pins()}
+            if lc is None:
+                if sig:
+                    out.append("%s: no Liberty cell" % name)
+                continue
+            lpins = {n for n, p in lc.pins.items() if p.direction != "internal"}
+            if set(sig) != lpins:
+                out.append("%s: pins differ (LEF %s, Liberty %s)" % (name, sorted(sig), sorted(lpins)))
+                continue
+            for pn, mp in sig.items():
+                d = mp.direction.split()[0].lower()
+                if d != lc.pins[pn].direction:
+                    out.append("%s.%s: direction LEF %s, Liberty %s" % (name, pn, d, lc.pins[pn].direction))
+        for name in ll.cells:
+            if name not in self.macros:
+                out.append("%s: Liberty cell without LEF macro" % name)
+        return out
 
     def add_lef(self, path):
         with open(path, errors="replace") as f:

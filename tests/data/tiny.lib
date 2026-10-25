@@ -1,0 +1,99 @@
+/* Hand-written Liberty for the dla.db tests (no PDK data).
+   Units are ps / fF on purpose: the reader must convert to ns / pF. */
+library (tiny) {
+  delay_model : table_lookup ;
+  time_unit : "1ps" ;
+  capacitive_load_unit (1, ff) ;
+  voltage_unit : "1V" ;
+  nom_voltage : 1.2 ;
+  nom_temperature : 25 ;
+  input_threshold_pct_rise : 50 ;
+  slew_derate_from_library : 1
+  default_max_transition : 500 ;
+  // load is variable_1 here (transposed with respect to most libraries)
+  lu_table_template (load_slew_2x3) {
+    variable_1 : total_output_net_capacitance ;
+    variable_2 : input_net_transition ;
+    index_1 ("1, 11") ;
+    index_2 ("10, 110, 210") ;
+  }
+  lu_table_template (setup_2x2) {
+    variable_1 : constrained_pin_transition ;
+    variable_2 : related_pin_transition ;
+    index_1 ("10, 110") ;
+    index_2 ("10, 110") ;
+  }
+  lu_table_template (slew_1d) {
+    variable_1 : input_net_transition ;
+    index_1 ("10, 110") ;
+  }
+  cell (NAND2) {
+    area : 2.5 ;
+    cell_footprint : nand2 ;
+    pin (A, B) {
+      direction : input ;
+      capacitance : 2 ;
+      rise_capacitance : 2.1 ;
+    }
+    pin (Y) {
+      direction : output ;
+      function : "(A B)'" ;
+      max_capacitance : 100 ;
+      timing () {
+        related_pin : "A B" ;
+        timing_sense : negative_unate ;
+        cell_rise (load_slew_2x3) {
+          values ("10, 20, 30", \
+                  "50, 60, 70") ;
+        }
+        cell_fall (load_slew_2x3) {
+          index_1 ("2, 12") ;
+          values ("10, 20, 30", "50, 60, 70") ;
+        }
+        rise_transition (scalar) { values ("15") ; }
+        fall_transition (slew_1d) { values ("20, 40") ; }
+      }
+    }
+  }
+  cell (DFFR) {
+    area : 10 ;
+    dont_use : true ;
+    ff (IQ, IQN) {
+      clocked_on : "CK" ;
+      next_state : "D" ;
+      clear : "!RN" ;
+    }
+    pin (D) {
+      direction : input ;
+      capacitance : 1 ;
+      timing () {
+        related_pin : CK ;
+        timing_type : setup_rising ;
+        rise_constraint (setup_2x2) { values ("30, 40", "50, 60") ; }
+        fall_constraint (scalar) { values ("25") ; }
+      }
+    }
+    pin (CK) { direction : input ; clock : true ; capacitance : 1.5 ; }
+    pin (RN) { direction : input ; capacitance : 1 ; }
+    pin (Q) {
+      direction : output ;
+      function : "IQ" ;
+      timing () {
+        related_pin : CK ;
+        timing_type : rising_edge ;
+        timing_sense : non_unate ;
+        cell_rise (scalar) { values ("100") ; }
+      }
+    }
+  }
+  cell (LATCH) {
+    latch (IQ, IQN) { enable : "G" ; data_in : "D" ; }
+    pin (D) { direction : input ; }
+    pin (G) { direction : input ; }
+    pin (Q) { direction : output ; function : "IQ" ; }
+  }
+  cell (ICG) {
+    statetable ("CK E", "IQ") { table : "L L : - : L" ; }
+    pin (CK) { direction : input ; }
+  }
+}

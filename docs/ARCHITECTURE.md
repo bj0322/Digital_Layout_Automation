@@ -73,7 +73,8 @@ Each stage reads the previous stage's DEF (+ Verilog for synth/STA), mutates a
 |---|---|
 | `geom.py` | `r6`, DEF orientations (`N S E W FN FS FE FW`), `xform_rect`, DBU conversion (`to_dbu` refuses off-grid values) |
 | `lex.py` | LEF/DEF tokenizer with line numbers, `ParseError` |
-| `library.py` | `Library` (layers bottom-up, vias, via rules, sites, macros with pins/OBS) and the LEF reader |
+| `library.py` | `Library` (layers bottom-up, vias, via rules, sites, macros with pins/OBS; Liberty per corner, `timing()`, `check_join()`) and the LEF reader |
+| `liberty.py` | Liberty: generic tree parser/writer, `LibertyLib` (units → ns/pF, cells, pins, NLDM arcs, `ff`/`latch`), `Table` lookup, Boolean `Expr` |
 | `design.py` | `Design` (insts, ports, nets, special nets, rows, tracks, gcell grid, DEF vias, blockages) |
 | `def_io.py` | DEF read / write |
 | `verilog.py` | structural Verilog read / write |
@@ -93,6 +94,8 @@ Each stage reads the previous stage's DEF (+ Verilog for synth/STA), mutates a
 
 ## 5. Units and coordinates
 
+- **Time / capacitance**: ns and pF everywhere; Liberty values are converted on read
+  from the library's declared units.
 - **Length**: µm as Python floats, rounded with `r6` (6 decimals) after arithmetic;
   geometry is snapped to the manufacturing grid where it is created
   (`tech.snap`, `stdcell.rules.snap`). DEF/LEF integer database units appear only in

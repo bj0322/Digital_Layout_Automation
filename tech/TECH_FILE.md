@@ -30,6 +30,8 @@ IHP SG13G2 PDK.
     "tech_lef": ["${PDK_ROOT}/.../tech.lef"], // optional: technology LEF (full layer stack,
                                            // vias), read by the netlist flow (dla.db)
     "lef": ["${PDK_ROOT}/.../stdcell.lef"], // one or more LEF files (macros)
+    "liberty": {"typ": ["${PDK_ROOT}/.../typ.lib"],   // optional: Liberty (NLDM) per corner,
+                "slow": ["..."]},          // first corner = default; a plain list = one corner
     "gds": "${PDK_ROOT}/.../stdcell.gds",
     "verilog": "${PDK_ROOT}/.../stdcell.v"  // optional, for your own simulations
   },
