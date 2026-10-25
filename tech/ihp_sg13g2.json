@@ -2,6 +2,7 @@
   "name": "ihp_sg13g2",
   "comment": "IHP SG13G2 open PDK (Apache-2.0), https://github.com/IHP-GmbH/IHP-Open-PDK. Set PDK_ROOT to the folder that contains ihp-sg13g2/.",
   "files": {
+    "tech_lef": ["${PDK_ROOT}/ihp-sg13g2/libs.ref/sg13g2_stdcell/lef/sg13g2_tech.lef"],
     "lef": ["${PDK_ROOT}/ihp-sg13g2/libs.ref/sg13g2_stdcell/lef/sg13g2_stdcell.lef"],
     "gds": "${PDK_ROOT}/ihp-sg13g2/libs.ref/sg13g2_stdcell/gds/sg13g2_stdcell.gds",
     "verilog": "${PDK_ROOT}/ihp-sg13g2/libs.ref/sg13g2_stdcell/verilog/sg13g2_stdcell.v"

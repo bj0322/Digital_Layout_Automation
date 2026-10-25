@@ -29,7 +29,7 @@ export DLA_TECH=tech/ihp_sg13g2.json
 python gen.py decoder --bits 10 --name row_dec
 python gen.py --tech tech/ihp_sg13g2.json stdcell                     # own std cells -> out/dla_lib/
 python gen.py --tech out/dla_lib/dla_lib.tech.json decoder --bits 6   # decoder from those cells
-python -m pytest -q tests                                             # 31 tests
+python -m pytest -q tests                                             # 55 tests
 ```
 
 From Python:
@@ -216,11 +216,14 @@ dla/
   stdcell/        std-cell generator: rules (template), netlist (networks, switch sim),
                   euler (gate order), cell (placement + metal-1 router), writers
                   (GDS/LEF/SPICE/Verilog/tech), check (KLayout DRC + LVS), library
+  db/             design database for the netlist flow: Library (LEF), Design (netlist,
+                  placement, routing), DEF read/write, structural Verilog read/write
   export.py       block JSON, structural Verilog, RTL, testbench
   sim.py          pure-Python gate-level simulator (exhaustive checks)
   gds.py          KLayout back end: GDS build, connectivity, tech-driven DRC, PNG
 gen.py            command-line interface
 tech/             tech-file reference and the IHP SG13G2 example
+docs/             ARCHITECTURE.md (modules, data flow, units), plan/ (milestone plans)
 klayout_scripts/  wrappers for the KLayout application (klayout -b -r ...)
 tests/            pytest suite (needs DLA_TECH)
 ```

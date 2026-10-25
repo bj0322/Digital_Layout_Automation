@@ -12,6 +12,7 @@ __pycache__/
 PDK/
 local/
 *.lef
+!tests/data/*.lef
 *.lib
 *.db
 *.cdl

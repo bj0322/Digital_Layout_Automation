@@ -1,0 +1,59 @@
+# Hand-written DEF on IHP SG13G2 std cells (names only, no PDK data) for the dla.db tests.
+VERSION 5.8 ;
+DIVIDERCHAR "/" ;
+BUSBITCHARS "[]" ;
+DESIGN ihp_small ;
+UNITS DISTANCE MICRONS 1000 ;
+DIEAREA ( 0 0 ) ( 24000 11340 ) ;
+ROW ROW_0 CoreSite 0 0 N DO 50 BY 1 STEP 480 0 ;
+ROW ROW_1 CoreSite 0 3780 FS DO 50 BY 1 STEP 480 0 ;
+ROW ROW_2 CoreSite 0 7560 N DO 50 BY 1 STEP 480 0 ;
+TRACKS Y 210 DO 27 STEP 420 LAYER Metal1 ;
+TRACKS X 240 DO 50 STEP 480 LAYER Metal2 ;
+TRACKS Y 210 DO 27 STEP 420 LAYER Metal3 ;
+COMPONENTS 7 ;
+  - u_inv sg13g2_inv_1 + PLACED ( 0 0 ) N ;
+  - u_nand sg13g2_nand2_1 + PLACED ( 1440 0 ) N ;
+  - u_tie sg13g2_tiehi + PLACED ( 3360 0 ) N ;
+  - r_q sg13g2_dfrbp_1 + PLACED ( 0 3780 ) FS ;
+  - u_buf sg13g2_buf_1 + PLACED ( 13920 3780 ) FS ;
+  - u_buf2 sg13g2_buf_1 + PLACED ( 5280 0 ) FN ;
+  - fill_0 sg13g2_fill_2 + FIXED ( 15840 3780 ) FS ;
+END COMPONENTS
+PINS 6 ;
+  - a + NET a + DIRECTION INPUT + USE SIGNAL
+    + LAYER Metal2 ( -100 0 ) ( 100 400 ) + PLACED ( 720 0 ) N ;
+  - b + NET b + DIRECTION INPUT + USE SIGNAL
+    + LAYER Metal2 ( -100 0 ) ( 100 400 ) + PLACED ( 2160 0 ) N ;
+  - clk + NET clk + DIRECTION INPUT + USE CLOCK
+    + LAYER Metal2 ( -100 0 ) ( 100 400 ) + PLACED ( 6720 11340 ) S ;
+  - y[0] + NET y[0] + DIRECTION OUTPUT + USE SIGNAL
+    + LAYER Metal3 ( -100 0 ) ( 100 400 ) + PLACED ( 24000 5670 ) W ;
+  - y[1] + NET y[1] + DIRECTION OUTPUT + USE SIGNAL
+    + LAYER Metal3 ( -100 0 ) ( 100 400 ) + PLACED ( 24000 1470 ) W ;
+  - VDD + NET VDD + SPECIAL + DIRECTION INOUT + USE POWER ;
+END PINS
+SPECIALNETS 2 ;
+  - VDD ( * VDD ) + USE POWER
+    + ROUTED Metal1 440 + SHAPE FOLLOWPIN ( 0 3780 ) ( 24000 3780 )
+    NEW Metal2 400 + SHAPE STRIPE ( 23040 0 ) ( 23040 11340 ) ;
+  - VSS ( * VSS ) + USE GROUND
+    + ROUTED Metal1 440 + SHAPE FOLLOWPIN ( 0 0 ) ( 24000 0 )
+    NEW Metal1 440 + SHAPE FOLLOWPIN ( 0 7560 ) ( 24000 7560 ) ;
+END SPECIALNETS
+NETS 9 ;
+  - a ( PIN a ) ( u_inv A ) + USE SIGNAL
+    + ROUTED Metal2 ( 720 0 ) ( * 1680 ) Via1_XX ;
+  - b ( PIN b ) ( u_nand B ) + USE SIGNAL ;
+  - n1 ( u_inv Y ) ( u_nand A ) + USE SIGNAL
+    + ROUTED Metal1 ( 960 1680 ) ( 2880 * )
+    NEW Metal2 ( 960 1680 ) ( * 2520 ) Via2_XX
+    NEW Metal3 ( 960 2520 ) ( 2880 * ) ;
+  - n2 ( u_nand Y ) ( r_q D ) ;
+  - clk ( PIN clk ) ( r_q CLK ) + USE CLOCK ;
+  - rst_n ( u_tie L_HI ) ( r_q RESET_B ) ;
+  - q ( r_q Q ) ( u_buf A ) ( u_buf2 A ) ;
+  - y[0] ( u_buf X ) ( PIN y[0] ) ;
+  - y[1] ( u_buf2 X ) ( PIN y[1] ) ;
+END NETS
+END DESIGN
