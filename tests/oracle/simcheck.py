@@ -14,6 +14,29 @@ import subprocess
 import tempfile
 
 
+def functional_models(path, workdir=None):
+    """Copies of a cell-model file and the other .v files next to it (UDPs) without
+    specify blocks (Icarus rejects some timing checks). Returns the list of paths."""
+    import glob
+    import re
+    out_dir = workdir or tempfile.mkdtemp(prefix="dla_cells_")
+    outs = []
+    for src in [path] + sorted(p for p in glob.glob(os.path.join(os.path.dirname(path), "*.v")) if p != path):
+        with open(src) as f:
+            text = f.read()
+        text = re.sub(r"\bspecify\b.*?\bendspecify\b", "", text, flags=re.S)
+
+        def _delays(m):     # signals the specify block used to drive ($setuphold delayed nets)
+            names = re.findall(r"delayed_(\w+)", m.group(0))
+            return m.group(0) + "".join("\n\tassign delayed_%s = %s;" % (n, n) for n in names)
+        text = re.sub(r"wire\s+delayed_[^;]*;", _delays, text)
+        out = os.path.join(out_dir, os.path.basename(src))
+        with open(out, "w") as f:
+            f.write(text)
+        outs.append(out)
+    return outs
+
+
 def have_iverilog():
     return shutil.which("iverilog") is not None and shutil.which("vvp") is not None
 

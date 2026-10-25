@@ -29,7 +29,8 @@ export DLA_TECH=tech/ihp_sg13g2.json
 python gen.py decoder --bits 10 --name row_dec
 python gen.py --tech tech/ihp_sg13g2.json stdcell                     # own std cells -> out/dla_lib/
 python gen.py --tech out/dla_lib/dla_lib.tech.json decoder --bits 6   # decoder from those cells
-python -m pytest -q tests                                             # 65 tests
+python gen.py --tech tech/ihp_sg13g2.json synth --verilog bench/gcd.v --top gcd   # RTL -> out/gcd/synth.v
+python -m pytest -q tests                                             # 118 tests (oracle tests need yosys / iverilog)
 ```
 
 From Python:
@@ -100,9 +101,55 @@ Requirements on the library and the full schema are in
 
 | PDK | What was checked | Result |
 |---|---|---|
+| IHP SG13G2 (open) | synthesis of all `bench/` designs: SAT equivalence with the RTL, Icarus gate-level simulation with the IHP cell models, area ≤ 1.3× Yosys + ABC | PASS (0.94–1.07×) |
 | IHP SG13G2 (open) | all 14 decoders (4–10 bits, EN on/off): built-in checks, **official IHP KLayout DRC deck** (FEOL + BEOL, density excluded), Icarus Verilog with the IHP cell models | all clean / PASS |
 
 ---
+
+## Synthesis (RTL → gates)
+
+`python gen.py --tech <tech.json> synth --verilog <files> --top <top> [--mode area|delay]`
+turns synthesizable Verilog-2005 into a netlist of the PDK's Liberty cells and proves it
+equivalent to the RTL before writing it.
+
+```
+[tech] ihp_sg13g2: Liberty corner typ, 84 cells
+[elab] gcd: 35 input bits, 18 output bits, 51 flops, 1057 AIG nodes
+[opt ] AIG 1057 -> 688 nodes
+[map ] 440 cells, area 6159.28 um^2, depth 4.519 ns (area mode)
+[cec ] netlist vs RTL (SAT, FF boundaries): PASS
+[out ] out/gcd/synth.v, out/gcd/reports/synth.rpt  (2.9s)
+RESULT: PASS
+```
+
+1. **Front end** (`dla/rtl`): preprocessor, parser and elaborator for the synthesizable
+   subset (parameters, generate, functions, hierarchy, `always` blocks with if/case/for,
+   async reset/set). Unsupported constructs, latches, loops and multiple drivers stop
+   with `file:line` errors.
+2. **AIG** (`dla/synth`): bit-blasting into an and-inverter graph with flip-flops,
+   SAT sweeping (FRAIG), ISOP-based refactoring and balancing.
+3. **Mapping**: priority cuts (k ≤ 6), Boolean matching against every input permutation
+   / inversion of every Liberty gate, area flow + exact area recovery; delay mode keeps
+   required times. Flip-flops map to the library's `ff` cells (inverted storage for
+   async set, clock inverter for the other edge); constants get tie cells.
+4. **Proof**: the netlist is converted back to an AIG from the Liberty functions and
+   checked against the elaborated RTL with a pure-Python CDCL SAT solver at the FF
+   boundaries. A netlist that fails is never written.
+
+Outputs in `out/<top>/`: `synth.v`, `synth.json` (report, FF instance → RTL register map),
+`reports/synth.rpt`.
+
+| Bench (IHP, typ) | Flops | Cells | Area µm² | Yosys+ABC µm² | Ratio | Depth area / delay mode (ns) | Equivalence |
+|---|---|---|---|---|---|---|---|
+| counter8 | 8 | 56 | 838.2 | 830.8 | 1.01 | 1.17 / 1.04 | PASS |
+| gcd | 51 | 440 | 6159.3 | 5731.3 | 1.07 | 4.52 / 4.26 | PASS |
+| uart_tx | 17 | 94 | 1564.0 | 1480.5 | 1.06 | 0.88 / 0.81 | PASS |
+| uart_rx | 28 | 104 | 2153.6 | 2148.2 | 1.00 | 0.76 / 0.66 | PASS |
+| alu32 | 34 | 1278 | 13022.6 | 13849.8 | 0.94 | 8.46 / 7.18 | PASS |
+
+Yosys 0.33: `synth; dfflibmap; abc -liberty; opt_clean`. Depth is the sum of nominal
+Liberty delays along the longest path (STA comes in M3). Every netlist above also
+matches the RTL in Icarus Verilog with the IHP cell models (`tests/oracle`).
 
 ## Std-cell generator
 
@@ -216,6 +263,10 @@ dla/
   stdcell/        std-cell generator: rules (template), netlist (networks, switch sim),
                   euler (gate order), cell (placement + metal-1 router), writers
                   (GDS/LEF/SPICE/Verilog/tech), check (KLayout DRC + LVS), library
+  rtl/            Verilog front end: lexer + preprocessor, parser, elaborator (-> AIG)
+  synth/          aig, words (bit-blasting), sat, fraig (SAT sweeping / CEC), rewrite
+                  (refactor, balance), cells (Liberty target), mapper, netgen, verify,
+                  flow (synthesize), report
   db/             design database for the netlist flow: Library (LEF + Liberty timing),
                   Design (netlist, placement, routing), DEF read/write, structural Verilog
                   read/write, Liberty read/write with NLDM lookup
@@ -226,7 +277,8 @@ gen.py            command-line interface
 tech/             tech-file reference and the IHP SG13G2 example
 docs/             ARCHITECTURE.md (modules, data flow, units), plan/ (milestone plans)
 klayout_scripts/  wrappers for the KLayout application (klayout -b -r ...)
-tests/            pytest suite (needs DLA_TECH)
+bench/            benchmark RTL (counter8, gcd, uart_tx, uart_rx, alu32)
+tests/            pytest suite (PDK tests need DLA_TECH; tests/oracle need yosys / iverilog)
 ```
 
 ### Adding a block type

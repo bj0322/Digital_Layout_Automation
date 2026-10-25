@@ -30,7 +30,8 @@ def test_units_pins_and_cells():
     assert y.max_cap == approx(0.1) and [a.related for a in y.arcs] == ["A", "B"]
     assert [p.name for p in nand.inputs()] == ["A", "B"] and [p.name for p in nand.outputs()] == ["Y"]
     dff = lib.cells["DFFR"]
-    assert dff.dont_use and dff.is_sequential() and dff.seq.kind == "ff"
+    assert not dff.dont_use and lib.cells["LATCH"].dont_use
+    assert dff.is_sequential() and dff.seq.kind == "ff"
     assert dff.seq.clocked_on.text == "CK" and dff.seq.clear.truth(["RN"]) == [1, 0]
     assert dff.pins["CK"].clock and dff.pins["Q"].arc("CK", "rising_edge").sense == "non_unate"
     assert lib.cells["LATCH"].seq.kind == "latch" and lib.cells["LATCH"].seq.enable.text == "G"

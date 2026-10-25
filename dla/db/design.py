@@ -163,6 +163,16 @@ class Design:
             self.add_net(p.net).conns.append((PIN, name))
         return p
 
+    def rename_net(self, old, new):
+        if new in self.nets:
+            raise KeyError("net %s exists" % new)
+        n = self.nets.pop(old)
+        n.name = new
+        self.nets[new] = n
+        for p in self.ports.values():
+            if p.net == old:
+                p.net = new
+
     def connect(self, inst, pin, net):
         self.add_net(net).conns.append((inst, pin))
 

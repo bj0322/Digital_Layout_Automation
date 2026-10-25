@@ -5,6 +5,7 @@
     python gen.py decoder --bits 10 --name row_dec --no-gds              # tech from $DLA_TECH
     python gen.py --tech tech/ihp_sg13g2.json stdcell                     # -> out/dla_lib/ (own std cells)
     python gen.py --tech out/dla_lib/dla_lib.tech.json decoder --bits 6   # block from the generated cells
+    python gen.py --tech tech/ihp_sg13g2.json synth --verilog bench/gcd.v --top gcd   # -> out/gcd/synth.v
 
 Steps: place + route -> block JSON / layout netlist / RTL / testbench
        -> exhaustive Python gate sim -> GDS -> metal connectivity -> metal/via DRC -> PNG
@@ -42,9 +43,20 @@ def main(argv=None):
     s.add_argument("--prefix", default="dla_", help="cell name prefix")
     s.add_argument("--cells", nargs="+", help="cells to build, e.g. inv_1 nand2_1 (default: all)")
 
+    y = sub.add_parser("synth", help="RTL -> gate-level netlist (Liberty cells), proven equivalent")
+    y.add_argument("--verilog", nargs="+", required=True, help="RTL source files")
+    y.add_argument("--top", required=True, help="top module")
+    y.add_argument("--sdc", help="constraints (kept for later stages; synthesis does not use them yet)")
+    y.add_argument("--mode", choices=("area", "delay"), default="area")
+    y.add_argument("--corner", help="Liberty corner of the tech file (default: its first)")
+    y.add_argument("--param", action="append", default=[], metavar="NAME=VALUE", help="top-level parameter")
+    y.add_argument("--define", action="append", default=[], metavar="NAME[=VALUE]", help="preprocessor macro")
+
     a = ap.parse_args(argv)
     if a.block == "stdcell":
         return stdcell(a)
+    if a.block == "synth":
+        return synth(a)
     tech = load(a.tech)
     print("[tech] " + tech.summary())
     t0 = time.time()
@@ -139,6 +151,51 @@ def stdcell(a):
         print("[tech] %s  (use with --tech to build blocks from these cells)" % p["tech"])
     print("RESULT: %s" % ("PASS" if ok else "FAIL"))
     return 0 if ok else 1
+
+
+def synth(a):
+    from dla.db import Library
+    from dla.db.lex import ParseError
+    from dla.synth.flow import SynthError, synthesize
+    from dla.synth.report import write_outputs
+    tech = load(a.tech)
+    if not tech.liberty:
+        sys.exit("tech %s has no files.liberty (needed for synthesis)" % tech.name)
+    corner = a.corner or list(tech.liberty)[0]
+    lib = Library.from_tech(tech, corners=[corner])
+    liberty = lib.liberty[corner]
+    print("[tech] %s: Liberty corner %s, %d cells" % (tech.name, corner, len(liberty.cells)))
+    params = {}
+    for p in a.param:
+        k, _, v = p.partition("=")
+        params[k] = int(v, 0)
+    defines = {}
+    for d in a.define:
+        k, _, v = d.partition("=")
+        defines[k] = v or "1"
+    t0 = time.time()
+    try:
+        r = synthesize(a.verilog, a.top, liberty, params=params, mode=a.mode, defines=defines)
+    except (ParseError, SynthError, ValueError) as e:
+        print("[synth] error: %s" % e)
+        print("RESULT: FAIL")
+        return 1
+    rep = r.report
+    print("[elab] %s: %d input bits, %d output bits, %d flops, %d AIG nodes" % (
+        a.top, sum(1 for p in r.design.ports.values() if p.direction == "INPUT"),
+        sum(1 for p in r.design.ports.values() if p.direction == "OUTPUT"), rep["flops"], rep["aig_ands"]))
+    print("[opt ] AIG %d -> %d nodes" % (rep["aig_ands"], rep["opt_ands"]))
+    print("[map ] %d cells, area %.2f um^2, depth %.3f ns (%s mode)" % (
+        rep["instances"], rep["area"], rep["depth_ns"], rep["mode"]))
+    print("[cec ] netlist vs RTL (SAT, FF boundaries): %s" % rep["equivalence"])
+    for w in r.warnings:
+        print("[warn] %s" % w)
+    if a.sdc:
+        print("[sdc ] %s recorded for later stages (not used by synthesis yet)" % a.sdc)
+    paths = write_outputs(r, liberty, os.path.join(a.out, a.top), {"sdc": a.sdc, "corner": corner})
+    print("[out ] %s, %s  (%.1fs)" % (paths["verilog"], paths["report"], time.time() - t0))
+    print("RESULT: %s" % ("PASS" if rep["equivalence"] == "PASS" else "FAIL"))
+    return 0 if rep["equivalence"] == "PASS" else 1
 
 
 if __name__ == "__main__":

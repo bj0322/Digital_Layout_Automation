@@ -1081,7 +1081,7 @@ class Exec:
     def merge(self, c, A, B, nb=False):
         g = self.el.g
         out = {}
-        for key in set(A) | set(B):
+        for key in list(A) + [k for k in B if k not in A]:      # deterministic order
             va, vb = A.get(key), B.get(key)
             if va is vb:
                 out[key] = va

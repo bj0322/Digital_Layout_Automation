@@ -55,9 +55,24 @@ library (tiny) {
       }
     }
   }
+  cell (INV) {
+    area : 1.5 ;
+    pin (A) { direction : input ; capacitance : 1.5 ; }
+    pin (Y) {
+      direction : output ;
+      function : "!A" ;
+      timing () {
+        related_pin : A ;
+        timing_sense : negative_unate ;
+        cell_rise (scalar) { values ("12") ; }
+        cell_fall (scalar) { values ("10") ; }
+      }
+    }
+  }
+  cell (TIEHI) { area : 2 ; pin (H) { direction : output ; function : "1" ; } }
+  cell (TIELO) { area : 2 ; pin (L) { direction : output ; function : "0" ; } }
   cell (DFFR) {
     area : 10 ;
-    dont_use : true ;
     ff (IQ, IQN) {
       clocked_on : "CK" ;
       next_state : "D" ;
@@ -75,6 +90,7 @@ library (tiny) {
     }
     pin (CK) { direction : input ; clock : true ; capacitance : 1.5 ; }
     pin (RN) { direction : input ; capacitance : 1 ; }
+    pin (QN) { direction : output ; function : "IQN" ; }
     pin (Q) {
       direction : output ;
       function : "IQ" ;
@@ -87,6 +103,7 @@ library (tiny) {
     }
   }
   cell (LATCH) {
+    dont_use : true ;
     latch (IQ, IQN) { enable : "G" ; data_in : "D" ; }
     pin (D) { direction : input ; }
     pin (G) { direction : input ; }

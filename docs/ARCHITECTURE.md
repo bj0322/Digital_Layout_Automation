@@ -42,6 +42,8 @@ RTL-to-GDS flow (see `CLAUDE.md` / `docs/plan/`) is layered on top of it.
 | `dla/gds.py` | KLayout back end: GDS build, metal connectivity, metal/via DRC, PNG | `build_gds`, `verify_conn`, `drc` |
 | `dla/stdcell/` | `rules` (template from rules), `netlist` (stages, switch sim), `euler` (gate order), `cell` (placement + M1 router), `writers` (GDS/LEF/SPICE/V/tech), `check` (KLayout DRC/LVS), `library` | `make_library` |
 | `dla/db/` | design database for the netlist flow | see §4 |
+| `dla/rtl/` | Verilog front end: `lexer` (+ preprocessor), `parser` (AST), `elab` (→ AIG with FFs) | `elaborate` |
+| `dla/synth/` | `aig`, `words` (bit-blasting), `sat` (CDCL), `fraig` (SAT sweeping, `cec`), `rewrite` (refactor, balance), `opt` (sweep), `cells` (Liberty target library), `mapper` (cut mapping), `netgen` (Design), `verify` (Design → AIG), `flow`, `report` | `synthesize` |
 | `gen.py` | CLI (`decoder`, `stdcell`; flow stages to come) | |
 | `klayout_scripts/` | wrappers to run the GDS steps inside the KLayout application | |
 
@@ -58,6 +60,13 @@ from the library GDS + drawn metal) → `verify_conn` / `drc` / `render_png`.
 **Std-cell generator**: `StdTech` (rules) → `netlist.make_cell` → `euler.orders` →
 `cell.make_logic` (layout) → `writers` → `<lib>.gds/.lef/.spice/.v/.tech.json` →
 `check.drc` / `check.lvs`.
+
+**Synthesis** (M2): `rtl/*.v` → `rtl.elab.elaborate` (AST → bit-level AIG + FFs, port
+list) → `synth.opt.sweep` → `fraig` → `refactor`/`balance`/`fraig` rounds →
+`cells.TargetLib` (from `Library.liberty[corner]`) → `mapper.Mapper` → `netgen.build_design`
+(→ `dla.db.Design`) → `verify.design_to_aig` + `fraig.cec` against the elaborated AIG →
+`db.write_verilog`. FF instances are named `<register bit>_reg`; `synth.json` maps them to
+the RTL bits (and whether the state is stored inverted).
 
 **Netlist flow** (M0 provides the bottom layer):
 ```
