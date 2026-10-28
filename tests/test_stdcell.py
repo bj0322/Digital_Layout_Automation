@@ -30,6 +30,58 @@ def test_switch_sim_catches_a_wrong_network():
     assert check_function(cn) > 0
 
 
+def test_series_finger_folding_and_single_row_breaks():
+    # Multi-finger series gate folds whole branches so each finger has its own internal node
+    cn = make_cell("nand2", 2)
+    assert len(cn.internal) == 2
+    breaks, seqs = orders(cn)
+    assert breaks == 0 and seqs
+    # Network where NMOS is continuous (Y-A-x1-B-VSS) but PMOS must break (no shared net):
+    # single-row break ("p") keeps NMOS diffusion unbroken
+    from dla.stdcell.netlist import CellNetlist, Transistor
+    c = CellNetlist("asym", "inv", "AB", [], lambda v: 0, 1)
+    c.devices = [
+        Transistor("MN0", "n", "A", "Y", "x1", 1.0),
+        Transistor("MN1", "n", "B", "x1", "VSS", 1.0),
+        Transistor("MP0", "p", "A", "VDD", "Y", 1.0),
+        Transistor("MP1", "p", "B", "n2", "n3", 1.0),
+    ]
+    brk, s = orders(c)
+    assert brk == 1 and any(col[3] == "p" for col in s[0])
+
+
+def test_pimp_cont_space_rule():
+    st = _tech()
+    import copy
+    from dla.stdcell import cell as C
+    from dla.stdcell.rules import StdTech
+    d = tempfile.mkdtemp()
+    raw = copy.deepcopy(st.raw)
+    raw["stdcell"]["rules"]["pimp_cont_space"] = 0.25
+    raw["stdcell"]["row_height"] = max(raw["stdcell"]["row_height"], 4.20)
+    p = os.path.join(d, "strict_pimp.json")
+    json.dump(raw, open(p, "w"))
+    st2 = StdTech(p)
+    c, ca = st2.r["cont_size"], st2.r["cont_activ_enc"]
+    # VSS tap contact top is c/2; ptap_imp must enclose it by >= 0.25
+    assert st2.ptap_imp >= c / 2 + 0.25 - 1e-6
+    # NMOS active contact bottom is nb + ca; must sit >= 0.25 above ptap_imp
+    assert (st2.nb + ca) - st2.ptap_imp >= 0.25 - 1e-6
+    # Single-row break placement in _columns produces split active on the broken row only
+    from dla.stdcell.netlist import CellNetlist, Transistor
+    cn = CellNetlist("asym", "inv", "AB", [], lambda v: 0, 1)
+    cn.devices = [
+        Transistor("MN0", "n", "A", "Y", "x1", 1.0),
+        Transistor("MN1", "n", "B", "x1", "VSS", 1.0),
+        Transistor("MP0", "p", "A", "VDD", "Y", 1.0),
+        Transistor("MP1", "p", "B", "VDD", "x2", 1.0),
+    ]
+    _, chains, _ = C._columns(st2, cn, [("A", ("Y", "x1"), ("VDD", "Y"), False, ("MN0", "MP0")),
+                                        ("B", ("x1", "VSS"), ("x2", "VDD"), "p", ("MN1", "MP1"))])
+    assert sum(1 for ch in chains if "n" in ch["rows"]) == 1
+    assert sum(1 for ch in chains if "p" in ch["rows"]) == 2
+
+
 def _tech():
     path = os.environ.get("DLA_TECH")
     if not path or "stdcell" not in json.load(open(path)):

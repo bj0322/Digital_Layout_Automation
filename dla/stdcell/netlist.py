@@ -7,8 +7,12 @@ pull-down network is a series/parallel expression over input (or earlier stage) 
     ("s", e1, e2, ...)     series      (AND in the pull-down)
     ("p", e1, e2, ...)     parallel    (OR in the pull-down)
 
-The pull-up network is the dual (series <-> parallel). ``fingers`` puts that many
-parallel devices for every transistor of a stage (drive strength).
+The pull-up network is the dual (series <-> parallel). A drive strength ``nf > 1`` folds
+the last stage into ``nf`` parallel copies of its whole network, ``("p", e, e, ...)``, so
+every finger of a series chain gets its own internal nodes and the fingers abut in one
+diffusion (``nand2_2``: Y-A-x1-B-VSS-B-x2-A-Y) instead of needing metal between shared nodes.
+
+Inputs may be given as a string of one-letter pins (``"AB"``) or as a tuple of names.
 """
 import itertools
 
@@ -16,9 +20,9 @@ import itertools
 # a stage is (out, pull_down) ; the last stage drives Y and gets the drive's fingers
 CATALOG = {
     "inv":   ("A", [("Y", "A")], lambda v: not v["A"], (1, 2)),
-    "nand2": ("AB", [("Y", ("s", "A", "B"))], lambda v: not (v["A"] and v["B"]), (1,)),
+    "nand2": ("AB", [("Y", ("s", "A", "B"))], lambda v: not (v["A"] and v["B"]), (1, 2)),
     "nand3": ("ABC", [("Y", ("s", "A", "B", "C"))], lambda v: not (v["A"] and v["B"] and v["C"]), (1,)),
-    "nor2":  ("AB", [("Y", ("p", "A", "B"))], lambda v: not (v["A"] or v["B"]), (1,)),
+    "nor2":  ("AB", [("Y", ("p", "A", "B"))], lambda v: not (v["A"] or v["B"]), (1, 2)),
     "nor3":  ("ABC", [("Y", ("p", "A", "B", "C"))], lambda v: not (v["A"] or v["B"] or v["C"]), (1,)),
     "and2":  ("AB", [("n0", ("s", "A", "B")), ("Y", "n0")], lambda v: v["A"] and v["B"], (1,)),
     "aoi21": (("A1", "A2", "B1"), [("Y", ("p", ("s", "A1", "A2"), "B1"))],
@@ -38,21 +42,35 @@ class Transistor:
         return "%s(%s %s %s-%s)" % (self.name, self.kind, self.g, self.a, self.b)
 
 
+def pin_list(pins):
+    """``"AB"`` -> ["A", "B"]; ``("A1", "A2")`` / ``["A1"]`` -> list of names; ``"Y"`` -> ["Y"]."""
+    if isinstance(pins, str):
+        return list(pins)
+    return [str(p) for p in pins]
+
+
+def fold(e, nf):
+    """`nf` parallel copies of a whole network (one finger = one copy, own internal nodes)."""
+    return e if nf <= 1 else ("p",) + (e,) * nf
+
+
 class CellNetlist:
-    def __init__(self, name, base, inputs, stages, func, drive, vdd="VDD", vss="VSS", wn=1.0, wp=1.0):
+    def __init__(self, name, base, inputs, stages, func, drive, vdd="VDD", vss="VSS", wn=1.0, wp=1.0,
+                 outputs="Y"):
         self.name, self.base, self.drive = name, base, drive
-        self.inputs = list(inputs)
-        self.output = "Y"
+        self.inputs = pin_list(inputs)
+        self.outputs = pin_list(outputs)
+        self.output = self.outputs[0]
         self.func = func
         self.vdd, self.vss = vdd, vss
         self.devices = []
         self._k = {"n": 0, "p": 0, "x": 0}
         for si, (out, pdn) in enumerate(stages):
             nf = drive if si == len(stages) - 1 else 1
-            self._build("n", pdn, out, vss, nf, wn)
-            self._build("p", _dual(pdn), vdd, out, nf, wp)
+            self._build("n", fold(pdn, nf), out, vss, 1, wn)
+            self._build("p", fold(_dual(pdn), nf), vdd, out, 1, wp)
         self.internal = sorted({n for d in self.devices for n in (d.a, d.b, d.g)}
-                               - set(self.inputs) - {self.output, vdd, vss})
+                               - set(self.inputs) - set(self.outputs) - {vdd, vss})
 
     def _node(self):
         self._k["x"] += 1
@@ -76,14 +94,14 @@ class CellNetlist:
 
     @property
     def pins(self):
-        return self.inputs + [self.output, self.vdd, self.vss]
+        return self.inputs + self.outputs + [self.vdd, self.vss]
 
     def spice(self, nmos, pmos, l, units="u"):
         def fmt(v):
             return ("%gu" % v) if units == "u" else ("%ge-6" % v)
         lines = [".SUBCKT %s %s" % (self.name, " ".join(self.pins)),
-                 "*.PININFO %s" % " ".join(["%s:I" % p for p in self.inputs] + ["%s:O" % self.output,
-                                                                                    "%s:B" % self.vdd, "%s:B" % self.vss])]
+                 "*.PININFO %s" % " ".join(["%s:I" % p for p in self.inputs] + ["%s:O" % o for o in self.outputs]
+                                                                 + ["%s:B" % self.vdd, "%s:B" % self.vss])]
         for d in self.devices:
             model, bulk = (nmos, self.vss) if d.kind == "n" else (pmos, self.vdd)
             lines.append("%s %s %s %s %s %s w=%s l=%s" % (d.name, d.a, d.g, d.b, bulk, model, fmt(d.w), fmt(l)))
@@ -118,7 +136,6 @@ def _vexpr(cell):
 
 def make_cell(base, drive=1, prefix="", vdd="VDD", vss="VSS", wn=1.0, wp=1.0):
     inputs, stages, func, drives = CATALOG[base]
-    inputs = list(inputs)
     return CellNetlist("%s%s_%d" % (prefix, base, drive), base, inputs, stages, func, drive, vdd, vss, wn, wp)
 
 

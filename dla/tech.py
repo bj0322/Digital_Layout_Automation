@@ -203,7 +203,7 @@ class Tech:
 
         self._derive_grid(d.get("grid", {}))
         self._rails()
-        self._access = {}
+        self._access, self._alts = {}, {}
         for role in self.ROLES:
             self.access(self.cells[role]["cell"])        # fail early
 
@@ -247,7 +247,7 @@ class Tech:
         for off in offs:
             self.x_off = off
             try:
-                self._access = {}
+                self._access, self._alts = {}, {}
                 for role in self.ROLES:
                     self.access(self.cells[role]["cell"])
                 break
@@ -291,7 +291,7 @@ class Tech:
         v, (s, e) = self.v1.size, sorted(self.v1.enc_below)
         sp = self.m1.space
         step = self.mfg * 2
-        cand = {}
+        cand, alts = {}, {}
         for p in self.signal_pins(cell):
             rects = m["pins"][p]
             others = [r for q, rs in m["pins"].items() if q != p for r in rs] + m["obs_pin"]
@@ -304,7 +304,7 @@ class Tech:
                 ylo = min(r[1] for r in rects)
                 yhi = max(r[3] for r in rects)
                 k0, k1 = int(math.ceil(ylo / step)), int(math.floor(yhi / step))
-                best = None
+                legal = []
                 for k in range(k0, k1 + 1):
                     y = round(k * step, 6)
                     via = (x - v / 2, y - v / 2, x + v / 2, y + v / 2)
@@ -329,11 +329,11 @@ class Tech:
                             cost = 1
                     if cost is None:
                         continue
-                    key = (cost, abs(y - m["h"] / 2))
-                    if best is None or key < best[0]:
-                        best = (key, (x, y, patch))
-                if best is not None:
-                    out.append(best)
+                    legal.append(((cost, abs(y - m["h"] / 2)), (x, y, patch)))
+                if legal:
+                    legal.sort(key=lambda kp: kp[0])        # stable: lowest y wins a tie
+                    out.append(legal[0])
+                    alts[(p, x)] = [pt for _, pt in legal]
             if not out:
                 raise RuntimeError("%s.%s: no legal VIA1 position on the track grid (offset %.3f)"
                                    % (cell, p, self.x_off))
@@ -355,7 +355,24 @@ class Tech:
         if not solve(sorted(cand, key=lambda p: len(cand[p]))):  # noqa
             raise RuntimeError("%s: pins cannot get distinct tracks" % cell)
         self._access[cell] = chosen
+        self._alts[cell] = {p: alts[(p, pt[0])] for p, pt in chosen.items()}
         return chosen
+
+    def access_options(self, cell):
+        """{pin: [(x, y, patch), ...]} every legal VIA1 position on the track `access` chose.
+
+        The first entry is the `access` default; the rest keep its x (so track alignment
+        between cells is unchanged) and are ordered by patch cost, then distance from the
+        default y. A placement picks an alternative when the default would collide with a
+        pin of a neighbouring instance (e.g. two rows whose pins face each other).
+        """
+        acc = self.access(cell)
+        opts = {}
+        for p, pt in acc.items():
+            rest = [a for a in self._alts[cell][p] if a != pt]
+            rest.sort(key=lambda a: (a[2] is not None, abs(a[1] - pt[1])))
+            opts[p] = [pt] + rest
+        return opts
 
     def summary(self):
         return ("%s: site %.3f x %.3f, grid %.3f x %.3f (x offset %.3f), cells %s"

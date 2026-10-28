@@ -28,7 +28,7 @@ Floorplan (H = row height; y = 0 is the bottom of the array)
 """
 from ..layout import H as LH
 from ..layout import V as LV
-from ..layout import Block, RoutingError, r6
+from ..layout import Block, FixedGeometryError, RoutingError, r6
 from ..tech import EPS, load
 
 PRE_START_GAP, PRE_GAP = 2, 2       # sites
@@ -92,6 +92,8 @@ def make_decoder(n_bits, enable=False, name=None, tech=None, channel=None):
             blk.meta.update({"block": "decoder", "n_bits": n_bits, "enable": enable,
                              "channel": extra, "tech": tech.name})
             return blk
+        except FixedGeometryError:
+            raise                                # independent of the channel: retrying cannot help
         except RoutingError as e:
             last = e
             extra += 4
@@ -106,6 +108,45 @@ def _row_line(blk, yb, orient, avoid_y):
     if not js:
         raise RuntimeError("row %.3f: no free grid line for the row wire" % yb)
     return blk.jy(max(js, key=lambda j: min(abs(blk.jy(j) - y) for y in avoid_y)))
+
+
+def _regular_wiring(blk, R, C):
+    """Row lines (horizontal layer) and column lines (vertical layer); claims their nodes."""
+    t = blk.t
+    H = t.row_h
+    for r in range(R):
+        net = "pa_n_%d" % r
+        yb = H * r
+        avoid = [blk.pin("pa_nand_%d" % r, p)[1] for p in ("A", "B", "Y")] + \
+                [blk.pin("dec_%d_0" % r, p)[1] for p in ("A", "B", "Y")]
+        yline = _row_line(blk, yb, blk.rows[r6(yb)], avoid)
+        x0, _ = blk.pin_drop("pa_nand_%d" % r, "Y", yline, net)
+        blk.via2(x0, yline, net)
+        x_end = blk.pin("dec_%d_%d" % (r, C - 1), "A")[0]
+        blk.m3(yline, x0, x_end, net)
+        blk.take_span(LH, blk.tn(x0), blk.tn(x_end), blk.yj(yline), blk.yj(yline), net)
+        for c in range(C):
+            inst = "dec_%d_%d" % (r, c)
+            x, _ = blk.pin_drop(inst, "A", yline, net)
+            if (blk.tn(x), blk.yj(yline)) in blk.novia:
+                raise FixedGeometryError("row line too close to a pin via")
+            blk.via2(x, yline, net)
+            out = "Y[%d]" % (c * R + r)
+            yx, yy = blk.pin(inst, "Y")
+            ny, js = blk.pin_stub(inst, t.cells["nor2"]["pins"]["Y"], out)
+            blk.take_span(LV, ny, ny, js[0], js[-1], out)
+            blk.add_pin(out, yx, yy)
+    for c in range(C):
+        net = "pb_n_%d" % c
+        x, y0 = blk.pin("pb_nand_%d" % c, "Y")
+        y1 = blk.pin("dec_%d_%d" % (R - 1, c), "B")[1]
+        assert abs(x - blk.pin("dec_0_%d" % c, "B")[0]) < EPS, "column nand2 Y not on the B track"
+        js0 = blk.pin_stub("pb_nand_%d" % c, t.cells["nand2"]["pins"]["Y"], net)[1]
+        blk.m2(x, y0, y1, net)
+        js1 = js0
+        for r in range(R):
+            js1 = blk.pin_stub("dec_%d_%d" % (r, c), t.cells["nor2"]["pins"]["B"], net)[1]
+        blk.take_span(LV, blk.tn(x), blk.tn(x), js0[0], js1[-1], net)
 
 
 def _build(n, en, name, tech, extra):
@@ -175,39 +216,10 @@ def _build(n, en, name, tech, extra):
     blk.power_straps()
 
     # ---- regular wiring: row lines (horizontal layer) and column lines (vertical) -----
-    for r in range(R):
-        net = "pa_n_%d" % r
-        yb = H * r
-        avoid = [blk.pin("pa_nand_%d" % r, p)[1] for p in ("A", "B", "Y")] + \
-                [blk.pin("dec_%d_0" % r, p)[1] for p in ("A", "B", "Y")]
-        yline = _row_line(blk, yb, blk.rows[r6(yb)], avoid)
-        x0, _ = blk.pin_drop("pa_nand_%d" % r, "Y", yline, net)
-        blk.via2(x0, yline, net)
-        x_end = blk.pin("dec_%d_%d" % (r, C - 1), "A")[0]
-        blk.m3(yline, x0, x_end, net)
-        blk.take_span(LH, blk.tn(x0), blk.tn(x_end), blk.yj(yline), blk.yj(yline), net)
-        for c in range(C):
-            inst = "dec_%d_%d" % (r, c)
-            x, _ = blk.pin_drop(inst, "A", yline, net)
-            if (blk.tn(x), blk.yj(yline)) in blk.novia:
-                raise RoutingError("row line too close to a pin via")
-            blk.via2(x, yline, net)
-            out = "Y[%d]" % (c * R + r)
-            yx, yy = blk.pin(inst, "Y")
-            ny, js = blk.pin_stub(inst, t.cells["nor2"]["pins"]["Y"], out)
-            blk.take_span(LV, ny, ny, js[0], js[-1], out)
-            blk.add_pin(out, yx, yy)
-    for c in range(C):
-        net = "pb_n_%d" % c
-        x, y0 = blk.pin("pb_nand_%d" % c, "Y")
-        y1 = blk.pin("dec_%d_%d" % (R - 1, c), "B")[1]
-        assert abs(x - blk.pin("dec_0_%d" % c, "B")[0]) < EPS, "column nand2 Y not on the B track"
-        js0 = blk.pin_stub("pb_nand_%d" % c, t.cells["nand2"]["pins"]["Y"], net)[1]
-        blk.m2(x, y0, y1, net)
-        js1 = js0
-        for r in range(R):
-            js1 = blk.pin_stub("dec_%d_%d" % (r, c), t.cells["nor2"]["pins"]["B"], net)[1]
-        blk.take_span(LV, blk.tn(x), blk.tn(x), js0[0], js1[-1], net)
+    try:
+        _regular_wiring(blk, R, C)
+    except RoutingError as e:            # fixed geometry: the same on every channel width
+        raise FixedGeometryError("fixed wiring: %s" % e)
     # keep the router out of the array
     top = blk.nj - 1
     j0 = blk.nearest_j(0.0)

@@ -17,7 +17,7 @@ A block generator (see ``dla/blocks``) typically
 import heapq
 import math
 
-from .tech import EPS, load
+from .tech import EPS, load, rect_dist
 
 BLOCKED = -1
 V, H = 0, 1                     # router layer index: vertical / horizontal routing layer
@@ -25,6 +25,11 @@ V, H = 0, 1                     # router layer index: vertical / horizontal rout
 
 class RoutingError(RuntimeError):
     pass
+
+
+class FixedGeometryError(RoutingError):
+    """A conflict in placement or fixed wiring: it does not depend on the router's channel,
+    so retrying with more routing space cannot fix it."""
 
 
 def r6(v):
@@ -49,6 +54,8 @@ class Block:
         self.conn = {}                           # net -> [(inst, cell pin)]
         self.pinpos = {}                         # (inst, pin) -> (x, y) VIA1 position
         self.patch = {}                          # (inst, pin) -> (w, h) of an M1 access patch
+        self.pin_vias = {}                       # track -> [y] VIA1s of placed signal pins
+        self.pin_claim = {}                      # (track, j) -> net of the pin owning that node
         self.rows = {}                           # ybase -> orient
         self.used = {}                           # ybase -> [(s0, s1)]
         self.pins, self.ports, self.meta = [], [], {}
@@ -113,17 +120,56 @@ class Block:
         self.roles[name] = role
         self.used.setdefault(ybase, []).append((site, site + w))
         if pins:
-            acc = t.access(cell)
+            opts = t.access_options(cell)
             pmap = t.cells[role]["pins"]
             for lp, net in pins.items():
                 p = pmap[lp]
-                ax, ay, patch = acc[p]
-                py = ybase + (ay if orient == "R0" else t.row_h - ay)
-                self.pinpos[(name, p)] = (r6(x + ax), r6(py))
+                px, py, patch = self._pick_access(name, p, x, ybase, orient, net, opts[p])
+                self.pinpos[(name, p)] = (px, py)
                 if patch:
                     self.patch[(name, p)] = patch
                 self.conn.setdefault(net, []).append((name, p))
         return x
+
+    def _pick_access(self, inst, pin, x, ybase, orient, net, opts):
+        """First access candidate (absolute x, y, patch) that keeps clear of the pins placed so far.
+
+        Two pins on one track conflict when they own a common grid node (see :meth:`pin_nodes`)
+        with different nets, or when their VIA1s are closer than the via1 spacing. This
+        happens e.g. between an MX row and the R0 row above it, whose pins near the shared
+        rail face each other. All candidates of a pin lie on the same track, so whichever is
+        chosen the cell's track offsets (and column alignment built on them) are unchanged.
+        """
+        t = self.t
+        lim = t.v1.size + t.v1.space
+        for ax, ay, patch in opts:
+            px = r6(x + ax)
+            py = r6(ybase + (ay if orient == "R0" else t.row_h - ay))
+            n = self.tn(px)
+            if any(abs(py - y) < lim - EPS for y in self.pin_vias.get(n, [])):
+                continue
+            js = self.pin_nodes(py)
+            if any(self.pin_claim.get((n, j), net) != net for j in js):
+                continue
+            if 0 <= n < self.ntrk and any(self.own[V][n][j] not in (None, net) for j in js):
+                continue
+            if patch and any(rect_dist(self._patch_box(px, py, patch, orient), self._patch_box(
+                    *self.pinpos[ip], self.patch[ip], orient)) < t.m1.space - EPS
+                    for ip in self.patch if ip[0] == inst):
+                continue                # M1 patches of one cell's pins must keep their spacing
+            self.pin_vias.setdefault(n, []).append(py)
+            for j in js:
+                self.pin_claim[(n, j)] = net
+            return px, py, patch
+        raise FixedGeometryError("%s.%s (%s): no VIA1 position clear of the neighbouring pins"
+                                 % (inst, pin, net))
+
+    @staticmethod
+    def _patch_box(x, y, patch, orient):
+        dx0, dy0, dx1, dy1 = patch
+        if orient == "MX":
+            dy0, dy1 = -dy1, -dy0
+        return (x + dx0, y + dy0, x + dx1, y + dy1)
 
     def _row_of(self, inst):
         for name, cell, x, yb, o in self.insts:
