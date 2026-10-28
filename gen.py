@@ -5,6 +5,7 @@
     python gen.py decoder --bits 10 --name row_dec --no-gds              # tech from $DLA_TECH
     python gen.py --tech tech/ihp_sg13g2.json stdcell                     # -> out/dla_lib/ (own std cells)
     python gen.py --tech out/dla_lib/dla_lib.tech.json decoder --bits 6   # block from the generated cells
+    python gen.py --tech tech/ihp_sg13g2.json sram --rows 4 --cols 4      # -> out/sram_4x4/ (6T bitcell + array)
 
 Steps: place + route -> block JSON / layout netlist / RTL / testbench
        -> exhaustive Python gate sim -> GDS -> metal connectivity -> metal/via DRC -> PNG
@@ -42,9 +43,18 @@ def main(argv=None):
     s.add_argument("--prefix", default="dla_", help="cell name prefix")
     s.add_argument("--cells", nargs="+", help="cells to build, e.g. inv_1 nand2_1 (default: all)")
 
+    r = sub.add_parser("sram", help="6T SRAM bitcell + rows x cols 4-way mirrored array")
+    r.add_argument("--rows", type=int, default=4)
+    r.add_argument("--cols", type=int, default=4)
+    r.add_argument("--cr", type=float, help="minimum cell ratio W_PD/W_PG (default: tech sram.cr or 1.5)")
+    r.add_argument("--pr", type=float, help="maximum pull-up ratio W_PU/W_PG (default: tech sram.pr or 1.0)")
+    r.add_argument("--name", help="top cell / output folder name (default sram_<rows>x<cols>)")
+
     a = ap.parse_args(argv)
     if a.block == "stdcell":
         return stdcell(a)
+    if a.block == "sram":
+        return sram(a)
     tech = load(a.tech)
     print("[tech] " + tech.summary())
     t0 = time.time()
@@ -86,6 +96,58 @@ def main(argv=None):
             gds.render_png(out_gds, os.path.join(outdir, zname + ".png"), dj, box=box, width=1400)
         print("[png ] %s" % outdir)
 
+    print("RESULT: %s" % ("PASS" if ok else "FAIL"))
+    return 0 if ok else 1
+
+
+def sram(a):
+    """Size + lay out + route the SRAM, then switch-level, DRC, LVS, connectivity and PNG checks."""
+    from dla.sram import make_sram
+    name = a.name or "sram_%dx%d" % (a.rows, a.cols)
+    outdir = os.path.join(a.out, name)
+    res = make_sram(a.tech or os.environ.get("DLA_TECH"), outdir, a.rows, a.cols, name, cr=a.cr, pr=a.pr)
+    st, p, cell, sz = res["st"], res["paths"], res["cell"], res["sizing"]
+    ok = not res["errors"]
+    print("[sim ] heuristic ratio model (fixed MU_P/VM, not SPICE SNM/write-margin/delay/power): "
+          "6T hold 0/1, read 0/1, write 0/1 + %dx%d array functional check: %s"
+          % (min(a.rows, 4), min(a.cols, 4), "PASS" if ok else "FAIL " + "; ".join(res["errors"])))
+    if a.no_gds:
+        print("RESULT: %s (DRC / LVS / connectivity skipped)" % ("PASS" if ok else "FAIL"))
+        return 0 if ok else 1
+    try:
+        from dla import gds
+        from dla.stdcell import check
+    except ImportError:
+        sys.exit("klayout Python package not found: pip install klayout  (or use --no-gds)")
+    bad = {}
+    for top in (name + "_bitcell", name + "_2x2", name):
+        v = check.drc(p["gds"], top, st)
+        if v:
+            bad[top] = v
+    print("[drc ] front-end + metal-1 rules on bitcell, 2x2 and array: %s" % ("0 violations" if not bad else bad))
+    ok &= not bad
+    stats = {}
+    good, msg = check.lvs(p["gds"], cell, st, cell.netlist.spice(st.nmos, st.pmos, st.L, st.spice_units), stats)
+    print("[lvs ] %s device extraction vs SPICE: %s (raw %s, combined %s)"
+          % (cell.name, "PASS" if good and stats.get("raw") == 6 and stats.get("combined") == 6 else "FAIL " + msg,
+             stats.get("raw"), stats.get("combined")))
+    ok &= good and stats.get("raw") == 6 and stats.get("combined") == 6
+    dj = json.load(open(p["json"]))
+    c = gds.verify_conn(dj, p["gds"])
+    print("[conn] %d probes: missing %d, opens %d, shorts %d -> %s"
+          % (c["probes"], len(c["missing"]), len(c["opens"]), len(c["shorts"]), "PASS" if c["ok"] else "FAIL"))
+    ok &= c["ok"]
+    v = gds.drc(p["gds"], name, st)
+    print("[drc ] metal/via rules M1-M3 / VIA1-VIA2 on the array: %s" % ("0 violations" if not v else v))
+    ok &= not v
+    w, h = cell.width, st.row_h
+    gds.render_png(p["gds"], os.path.join(outdir, "overview.png"), dj, width=900, top=name)
+    gds.render_png(p["gds"], os.path.join(outdir, "bitcell.png"), dj, box=[-0.1 * w, -0.1 * h, 1.1 * w, 1.1 * h],
+                   width=900, top=cell.name)
+    arr = res["array"]
+    gds.render_png(p["gds"], os.path.join(outdir, "array_corner.png"), dj,
+                   box=[0, 0, min(arr.width, arr.x_arr + 2 * w + 0.2 * w), min(arr.height, 2 * h)], width=1200, top=name)
+    print("[png ] %s" % outdir)
     print("RESULT: %s" % ("PASS" if ok else "FAIL"))
     return 0 if ok else 1
 

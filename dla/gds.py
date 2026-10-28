@@ -15,6 +15,22 @@ def _li(ly, ld):
     return ly.layer(ld[0], ld[1])
 
 
+def orient_trans(orient, x, yb, W, H):
+    """KLayout transformation of a cell [0,W]x[0,H] placed with lower-left corner (x, yb).
+
+    R0 / MX (vertical flip, the only ones block rows need) / MY (horizontal flip) / R180.
+    """
+    if orient == "R0":
+        return db.DTrans(db.DTrans.R0, x, yb)
+    if orient == "MX":
+        return db.DTrans(db.DTrans.M0, x, yb + H)
+    if orient == "MY":
+        return db.DTrans(db.DTrans.M90, x + W, yb)
+    if orient == "R180":
+        return db.DTrans(db.DTrans.R180, x + W, yb + H)
+    raise ValueError("orientation %r (expected R0, MX, MY or R180)" % (orient,))
+
+
 # ----------------------------------------------------------------------------- build
 def build_gds(d, stdgds, out):
     """d: block JSON dict. Instantiates library cells from the std-cell GDS by name."""
@@ -26,7 +42,9 @@ def build_gds(d, stdgds, out):
         c = ly.cell(cell)
         if c is None:
             raise KeyError("cell %s not in %s" % (cell, stdgds))
-        t = db.DTrans(db.DTrans.R0, x, yb) if orient == "R0" else db.DTrans(db.DTrans.M0, x, yb + H)
+        if orient in ("MY", "R180") and cell not in d.get("cells", {}):
+            raise KeyError("cell %s has no width in the block JSON (needed for orientation %s)" % (cell, orient))
+        t = orient_trans(orient, x, yb, d["cells"][cell]["w"] if orient in ("MY", "R180") else 0.0, H)
         top.insert(db.DCellInstArray(c.cell_index(), t))
     L = d["layers"]
     li = {k: _li(ly, L[k]) for k in ("m1", "v1", "m2", "v2", "m3")}
@@ -35,10 +53,10 @@ def build_gds(d, stdgds, out):
     for layer, x, y, net in d["vias"]:
         s = d["via_size"][layer] / 2
         top.shapes(li["v1" if layer == "via1" else "v2"]).insert(db.DBox(x - s, y - s, x + s, y + s))
-    if L.get("m2_text"):
-        tl = _li(ly, L["m2_text"])
-        for p in d["pins"]:
-            top.shapes(tl).insert(db.DText(p["name"], p["x"], p["y"]))
+    for p in d["pins"]:
+        tl = L.get(p.get("layer", "m2") + "_text")
+        if tl:
+            top.shapes(_li(ly, tl)).insert(db.DText(p["name"], p["x"], p["y"]))
     if L.get("boundary"):
         top.shapes(_li(ly, L["boundary"])).insert(db.DBox(*d["boundary"]))
     for k in ("m1", "m2", "m3"):          # merge touching routing shapes
@@ -83,9 +101,10 @@ def verify_conn(d, gds):
     for name, cell, x, yb, orient in d["insts"]:
         xc = x + d["cells"][cell]["w"] / 2
         for net, yc in d["rails"].items():
-            probes.append((net, name + ".rail", probe("m1", xc, yb + (yc if orient == "R0" else H - yc))))
+            flip = orient in ("MX", "R180")
+            probes.append((net, name + ".rail", probe("m1", xc, yb + (H - yc if flip else yc))))
     for p in d["pins"]:
-        probes.append((p["name"], "label " + p["name"], probe("m2", p["x"], p["y"])))
+        probes.append((p["name"], "label " + p["name"], probe(p.get("layer", "m2"), p["x"], p["y"])))
 
     by_net, by_cl, missing = {}, {}, []
     for net, what, cl in probes:
@@ -171,7 +190,7 @@ def drc(gds, topname, tech):
 DEFAULT_COLORS = [0x3070ff, 0xff40ff, 0x00c0c0, 0x202020, 0x606060]
 
 
-def render_png(gds, out, d, box=None, width=1400):
+def render_png(gds, out, d, box=None, width=1400, top=None):
     """Rasterize the top cell: base layers of the std cells in grey, routing in colour."""
     try:
         import pya as lay
@@ -179,6 +198,8 @@ def render_png(gds, out, d, box=None, width=1400):
         import klayout.lay as lay
     view = lay.LayoutView()
     view.load_layout(gds, True)
+    if top:
+        view.cellview(0).cell_name = top
     view.max_hier()
     view.clear_layers()
     L = d["layers"]

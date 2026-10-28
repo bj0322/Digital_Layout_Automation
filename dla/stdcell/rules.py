@@ -92,6 +92,14 @@ class StdTech:
         # must keep it, and the LEF reports every contact as a VIA1 obstruction
         self.v1_cont_space = max([float(v["space"]) for v in L.get("via1_keepout", {}).values()
                                   if tuple(v["gds"]) == self.lay["cont"]] or [0.0])
+        # routing layers above metal 1 and the via rules (used by the SRAM array generator)
+        self.m2 = Layer("vertical", L["vertical"]) if "vertical" in L else None
+        self.m3 = Layer("horizontal", L["horizontal"]) if "horizontal" in L else None
+        self.v2 = Layer("via2", L["via2"]) if "via2" in L else None
+        self.keepout = {k: (tuple(v["gds"]), float(v["space"])) for k, v in L.get("via1_keepout", {}).items()}
+        rl = d.get("rules", {})
+        self.via_stack = bool(rl.get("via_stack", True))
+        self.via12_space = float(rl.get("via1_via2_space", 0.0))
         r = s["rules"]
         missing = [k for k in RULES if k not in r]
         if missing:
@@ -103,6 +111,10 @@ class StdTech:
         self.wn, self.wp = float(dv["wn"]), float(dv["wp"])
         self.rail_w = float(s.get("rail_width", 0.0))
         self.spice_units = dv.get("spice", "u")       # "u": w=0.74u, or "m": SI metres
+        # optional 6T SRAM section (top level or inside "stdcell"): legal transistor widths, targets
+        self.sram = dict(d.get("sram", s.get("sram", {})))
+        self.min_nmos_width = float(self.sram.get("min_nmos_width", self.r["activ_width"]))
+        self.min_pmos_width = float(self.sram.get("min_pmos_width", self.r["activ_width"]))
         self._derive()
 
     # ------------------------------------------------------------------ template
@@ -114,18 +126,22 @@ class StdTech:
         self.tap_h = snap_up(max(c + 2 * ca, r["activ_width"]), 2 * g)
         self.rail_w = max(self.rail_w, c + 2 * ee, self.m1.width)
         pcs = r["pimp_cont_space"]
+        self.rail_space = max([self.m1.space] + [sp for w, prl, sp in self.m1.wide if w <= self.rail_w + EPS])
+        # opt-in (SRAM cell, narrow transistors): metal over a contact in the middle of the band must
+        # keep the rail spacing. Band edge >= rail half width + spacing + metal end enclosure - active enclosure.
+        clear = self.rail_w / 2 + self.rail_space + ee - ca if getattr(self, "clear_rail", False) else 0.0
         ptap_imp = max(self.tap_h / 2 + r["pimp_enc_ptap"], c / 2 + pcs)  # p-implant half height on the VSS tap
         # NMOS band: above the VSS tap (contacts on n+ active sit >= ca inside the band)
         nb = max(self.tap_h / 2 + r["activ_space"],
                  ptap_imp + max(r["pimp_space_ndiff"], r["pimp_space_gate"], pcs - ca),
-                 self.tap_h / 2 + r["poly_activ_space"] + r["poly_endcap"])
+                 self.tap_h / 2 + r["poly_activ_space"] + r["poly_endcap"], clear)
         self.nb = snap_up(nb, g)
         self.nt = round(self.nb + self.wn, 6)
         # PMOS band: below the VDD tap; the p-implant stops short of the n+ tap and its contacts
         self.pimp_top = round(min(H - self.tap_h / 2 - r["pimp_space_ntap"], H - c / 2 - pcs), 6)
         pt = H - max(self.tap_h / 2 + r["activ_space"],
                      H - self.pimp_top + max(r["pimp_enc_pdiff"], r["pimp_enc_gate"], pcs - ca),
-                     self.tap_h / 2 + r["poly_activ_space"] + r["poly_endcap"])
+                     self.tap_h / 2 + r["poly_activ_space"] + r["poly_endcap"], clear)
         self.pt = snap_dn(pt, g)
         self.pb = round(self.pt - self.wp, 6)
         # well / implant edge between the bands
@@ -153,7 +169,6 @@ class StdTech:
         if self.pad_y[0] > self.pad_y[1] + EPS:
             raise ValueError("tech %s: no room for a poly contact between the n and p active" % self.name)
         # metal-1 usable y range (wire centre), away from the wide rails
-        self.rail_space = max([self.m1.space] + [s for w, prl, s in self.m1.wide if w <= self.rail_w + EPS])
         self.m1_ylo = round(self.rail_w / 2 + self.rail_space + self.m1.width / 2, 6)
         self.m1_yhi = round(H - self.m1_ylo, 6)
         # device pitches (x)

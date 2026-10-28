@@ -127,3 +127,29 @@ The run prints the derived template (`[std ]` line: band positions, n-well edge,
 poly-contact window, gate pitches) and fails early if the row height cannot hold
 `wn` / `wp`. It writes `<lib>.tech.json`, a copy of the tech file pointing at the new
 LEF/GDS with the `inv`/`nand2`/`nor2`/`nor3`/`fill` roles filled in.
+
+## SRAM section (optional)
+
+Needed only for `python gen.py sram`. It sits at the top level (or inside `stdcell`):
+
+```jsonc
+"sram": {"min_nmos_width": 0.15, "min_pmos_width": 0.15, "cr": 1.5, "pr": 1.0}   // "l" optional
+```
+
+* `min_nmos_width` / `min_pmos_width`: smallest legal *transistor* channel width (default
+  `stdcell.rules.activ_width`). They can be larger than the active width rule: NSPL05 has
+  `activ_width` 0.7 but rule 2.ACT.W1 needs a channel width of 1.6.
+* `cr` (cell ratio `W_PD/W_PG`, minimum) and `pr` (pull-up ratio `W_PU/W_PG`, maximum): defaults
+  for `--cr` / `--pr`. `l` overrides the gate length (default `stdcell.devices.l`).
+
+The sizer finds the *minimum legal quantized widths* `(W_PU, W_PG, W_PD)` that satisfy the
+CR / PR targets and the single-contact / minimum-width floors; it is not a delay or power
+optimum. `cr`, `pr`, `v_read`, `v_write` and the `snm_*` / `write_margin_factor` figures
+(`"model": "heuristic_ratio"` in the JSON metrics) come from a fixed-`MU_P` (0.4) / fixed-`VM`
+(0.5) first-order resistive-divider heuristic ratio model. They are not PDK MOS-model results:
+true SNM, write margin, delay and power need SPICE simulation with the PDK device models.
+
+The generator also reads `layers.vertical` (M2), `layers.horizontal` (M3), `layers.via2`,
+`rules.via_stack`, `rules.via1_via2_space` and `layers.via1_keepout` (see above) to draw the
+bit lines (M2), word lines (M3) and the power straps. The array needs the `stdcell` section
+but no LEF/GDS files.
