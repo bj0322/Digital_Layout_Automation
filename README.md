@@ -84,6 +84,95 @@ on the GDS (the generated `_tb.v` runs with your library's Verilog models).
 
 ---
 
+## SPICE testbenches and ngspice runner
+
+`dla.spice` is a PDK-independent layer: a composable testbench builder plus a batch runner for
+[ngspice](https://ngspice.sourceforge.io/). It does not know about SRAM or any PDK; model files
+come in through `include` / raw statements.
+
+```python
+from dla.spice import SpiceDeck, SpiceRunner
+
+deck = (SpiceDeck("rc lowpass")
+        .include("models/my_pdk.lib")            # any path, spaces are fine
+        .add("VIN in 0 PULSE(0 1 0 1n 1n 10m 20m)", "R1 in out 1k", "C1 out 0 1u")
+        .tran("10u", "10m")
+        .measure("tran", "t50", "WHEN v(out)=0.5 RISE=1"))
+
+result = SpiceRunner(timeout=120).run(deck, "out/spice/rc", required=deck.measure_names)
+print(result.require("T50"))                      # 6.93e-04; names are case-insensitive
+```
+
+* **Deck**: `add` (raw statements), `include`, `model`, `op`, `dc`, `tran`, `measure`. The title
+  is line 1, then statements, analyses and `.measure` cards, and `.end` is written once
+  (`.end` cannot be passed to `add`). Arguments are validated before the deck changes.
+* **Executable**: `SpiceRunner(command=...)` if given (a path, or a list such as a wrapper
+  script plus its fixed arguments), else `$DLA_SPICE`, else `ngspice` (then `ngspice_con`) on
+  `PATH`. An explicit command or `$DLA_SPICE` that does not exist is an error, never a silent
+  fallback. It is started directly (no shell) as `<cmd> -b -o <log> <deck>` with host-native
+  absolute paths and stdin closed, so a wrapper (e.g. for WSL) must translate paths itself.
+* **Outputs**: `<name>.sp` and `<name>.log` are kept in `workdir` (default: a new temp
+  directory; see `result.deck_path` / `result.log_path`). A stale log is deleted first.
+* **Measures**: `name = value` lines are parsed to finite floats with lower-case keys.
+  SPICE suffixes work (`M` = milli, `MEG` = mega, `u`, `n`, ...). `failed`, `nan` and `inf`
+  results land in `result.invalid` instead of `result.measures`.
+* **Errors** (all subclass `SpiceError`, and carry `.result` when a run happened):
+  `SpiceUnavailable`, `SpiceTimeout`, `SpiceFailure` (non-zero exit, or a log reporting an
+  aborted simulation) and `SpiceMeasureError` (a `required=` measure is missing, failed or
+  non-finite). Messages include stderr/log excerpts and the log path.
+
+`smoke_testbench()` is an RC transient deck for checking an installation:
+
+```python
+from dla.spice import SpiceRunner, smoke_testbench
+deck = smoke_testbench()
+r = SpiceRunner().run(deck, "out/spice/smoke", required=deck.measure_names)
+# vfinal ~ 0.99988, t50 ~ 6.93e-4 s, trise ~ 2.197e-3 s
+```
+
+`pytest tests/test_spice.py` uses a fake simulator; its real-ngspice test is skipped unless
+ngspice is installed.
+
+---
+
+## SPICE artifacts, schematics and opt-in simulation
+
+Every generated system (decoder/block, std-cell library, SRAM) can emit PDK-aware SPICE data. It is driven
+by the optional `spice` section of the tech file (`tech/TECH_FILE.md`): model files, `vdd`, temperature,
+corner and the cell SPICE library. Nothing is guessed: what is not configured is reported as unavailable.
+
+```bash
+python gen.py --tech my.json stdcell                         # + <lib>.spice.json, <lib>_schematics.svg, schematics/*.svg
+python gen.py --tech out/dla_lib/dla_lib.tech.json decoder --bits 4   # + <name>.spice (structural), .spice.json, _schematic.svg
+python gen.py --tech my.json sram --rows 4 --cols 4          # + .spice.json, _schematic.svg, _bitcell_schematic.svg
+python gen.py --tech my.json --simulate auto  stdcell        # run ngspice if configured + available, else record why not
+python gen.py --tech my.json --simulate require --spice-cmd "C:/ngspice/bin/ngspice_con.exe" sram
+```
+
+* **Structural SPICE.** Decoder/block instances are written as `X<inst> ... <cell>` using the pin order of the
+  real `.SUBCKT` in `spice.cell_library` (power pins default to the tech supplies); the used sub-circuits are
+  copied verbatim. A missing cell or cell library skips the netlist and says why. Std-cell and SRAM keep their
+  generated transistor-level SPICE.
+* **Metadata.** `<name>.spice.json` (`dla-spice-metadata/1`): provenance (SHA-256 of tech/model files),
+  includes/corner/VDD/temperature, sub-circuit and device counts, pins, and `simulation` with status, checks and
+  measurements. `simulation.status` is `not_requested`, `unavailable`, `passed` or `failed`; numbers appear only
+  when a simulator produced them.
+* **Schematics.** `dla.schematic` draws circuit diagrams from SPICE data as dependency-free, deterministic SVG:
+  transistor-level cells (pull-up above / pull-down below each stage, series stacked, parallel side by side,
+  VDD/VSS rails), gate-level block diagrams (levelised; large blocks are collapsed into counted groups) and the
+  SRAM array + 6T bit-cell. Real measurements and the simulation status are annotated on the drawing. These are
+  circuit schematics; the layout PNGs (`overview.png`, ...) are separate files.
+* **Simulation policy.** `--simulate off` (default) never starts a simulator. `auto` runs when models and `vdd`
+  are configured and a simulator exists, otherwise records `unavailable` and exits 0. `require` exits non-zero
+  unless every check passed. A failing check, a simulator error, a timeout or an unparsable/failed `.measure`
+  is always `failed` with the reason and log path. Checks are DC: truth tables for cells, addressed-output
+  decoding for decoders, hold/read-disturb/write state checks for the 6T bit-cell. Delay arcs are measured only
+  when `spice.testbench.edge` and `load` are set.
+* **API.** `make_library(..., spice=SpiceOptions("auto"))`, `make_sram(..., spice=...)`,
+  `write_all(blk, outdir, spice=...)`; the default (`spice=None`) writes exactly the old files.
+
+---
+
 ## Using another PDK
 
 1. Copy `tech/ihp_sg13g2.json`, fill in your LEF/GDS paths, GDS layer numbers, the

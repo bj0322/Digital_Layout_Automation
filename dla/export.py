@@ -99,7 +99,10 @@ def write_decoder_tb(blk, path):
         f.write("    $finish;\n  end\nendmodule\n")
 
 
-def write_all(blk, outdir):
+def write_all(blk, outdir, spice=None):
+    """Write the block files. ``spice``: a :class:`dla.spice_artifacts.SpiceOptions` to also write the
+    structural ``<name>.spice`` (when the tech file configures ``spice.cell_library``), the
+    ``<name>.spice.json`` metadata and the schematic SVG; the report is left on ``blk.spice``."""
     os.makedirs(outdir, exist_ok=True)
     paths = {"json": os.path.join(outdir, blk.name + ".json"),
              "netlist": os.path.join(outdir, blk.name + "_layout.v")}
@@ -111,4 +114,8 @@ def write_all(blk, outdir):
         paths["tb"] = os.path.join(outdir, blk.name + "_tb.v")
         write_decoder_rtl(blk, paths["rtl"])
         write_decoder_tb(blk, paths["tb"])
+    if spice is not None:
+        from . import spice_artifacts
+        blk.spice = spice_artifacts.finalize_block(blk, outdir, paths, spice)
+        paths.update(blk.spice["paths"])
     return paths

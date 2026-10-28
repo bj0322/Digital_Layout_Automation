@@ -153,3 +153,63 @@ The generator also reads `layers.vertical` (M2), `layers.horizontal` (M3), `laye
 `rules.via_stack`, `rules.via1_via2_space` and `layers.via1_keepout` (see above) to draw the
 bit lines (M2), word lines (M3) and the power straps. The array needs the `stdcell` section
 but no LEF/GDS files.
+
+## SPICE section (optional)
+
+Every key is optional; without the section generation is unchanged and simulation is reported as
+*unavailable* (never faked). It sits at the top level of the tech file:
+
+```jsonc
+"spice": {
+  "includes": [                                     // device model files, in order
+    {"file": "${PDK_ROOT}/models/corner.lib", "section": "tt"},   // -> .lib "<file>" tt
+    "${PDK_ROOT}/models/extra.mod"                                // -> .include "<file>"
+  ],
+  "cell_library": ["${PDK_ROOT}/cells/stdcell.cdl"],// SPICE/CDL .SUBCKTs of the LEF cells (structural block netlists)
+  "vdd": 1.2,                                       // supply voltage in volts (number or SPICE string like "3.3")
+  "temperature": 27,                                // deg C, emitted as .temp
+  "corner": "tt",                                   // free text; recorded in the metadata/drawings
+  "testbench": {                                    // all optional
+    "max_vectors": 24,                              // decoder: input vectors simulated (default 24)
+    "high_fraction": 0.9, "low_fraction": 0.1,      // logic levels as a fraction of VDD (defaults 0.9 / 0.1)
+    "edge": "0.1n", "load": "10f"                   // BOTH set -> also measure delay arcs of generated cells
+  }
+}
+```
+
+* Paths follow the same rules as `files`: `${VAR}` / `${VAR:-default}`, relative to the tech file.
+  Do not commit proprietary paths or models: use `${PDK_ROOT}`-style variables or an ignored `local/` file.
+* `includes` + `vdd` are what a simulation needs. Models are never guessed: an unset variable, a missing
+  file or a missing `vdd` is reported (`simulation.status = "unavailable"` plus the reason).
+* `cell_library` supplies the real sub-circuits for decoder/block netlists. `python gen.py stdcell` writes it
+  into the generated `<lib>.tech.json` automatically (and carries over `includes`, re-based relative to the new
+  file), so blocks built from generated cells get structural SPICE without extra setup.
+* `testbench.edge` is the full 0-100 % ramp time of the input, `load` the output capacitance (farads);
+  delay is measured 50 % -> 50 %. They are testbench conditions you choose, recorded in the results.
+* The device model names in `stdcell.devices` (`nmos`, `pmos`) must exist in the included model files.
+
+### What is produced and how it is judged
+
+| artifact | `<name>.spice.json` | schematic SVG | `--simulate` checks (DC, real models) |
+|---|---|---|---|
+| `stdcell` | cells, functions, device counts | `<lib>_schematics.svg` + `schematics/<cell>.svg` | every input vector of every logic cell reaches the logic level (+ delay arcs if `edge`/`load`) |
+| `decoder` | block ports, instance count | `<name>_schematic.svg` | addressed output high, others low, for up to `max_vectors` vectors |
+| `sram` | rows/cols, sizing | `<name>_schematic.svg`, `<name>_bitcell_schematic.svg` | 6T bit-cell hold 0/1, read 0/1 (no flip, read bump measured), write 0/1 |
+
+Metadata JSON (`"schema": "dla-spice-metadata/1"`) holds provenance (generator version, tech name, SHA-256 of
+the tech and model files), the configured includes/corner/VDD/temperature, sub-circuit and device counts, top
+pins and supplies, and `simulation`: `requested` (`off|auto|require`), `status`
+(`not_requested|unavailable|passed|failed`), `reason`, simulator command, deck/log paths, `checks`,
+`measurements` (value + unit) and `delays`. Values only appear when a simulator produced them.
+
+### Policy (`gen.py --simulate`, `SpiceOptions`)
+
+| mode | not configured / no simulator | check fails or simulator errors |
+|---|---|---|
+| `off` (default) | nothing runs | – |
+| `auto` | recorded as `unavailable` with the reason, exit code 0 | `failed`, exit code 1 |
+| `require` | `unavailable`, exit code 1 | `failed`, exit code 1 |
+
+The simulator is `--spice-cmd`, else `$DLA_SPICE`, else `ngspice`/`ngspice_con` on `PATH` (see `dla.spice`).
+The bit-cell checks are DC state checks (`.nodeset` selects the stored state; a write succeeds when the old state
+is no longer a DC solution); they are not SNM, write-margin, timing or power characterisation.
