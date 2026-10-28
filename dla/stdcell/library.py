@@ -23,7 +23,9 @@ def default_cells():
     return ["%s_%d" % (b, d) for b, (_, _, _, ds) in CATALOG.items() for d in ds]
 
 
-def make_library(tech, outdir, name="dla_lib", prefix="dla_", cells=None, log=print):
+def make_library(tech, outdir, name="dla_lib", prefix="dla_", cells=None, log=print, spice=None):
+    """Generate the library. ``spice``: a :class:`dla.spice_artifacts.SpiceOptions` to also write the
+    ``<lib>.spice.json`` metadata, the schematics and (opt-in) run the SPICE checks; result key ``spice``."""
     st = tech if isinstance(tech, StdTech) else StdTech(tech)
     os.makedirs(outdir, exist_ok=True)
     log("[std ] " + st.summary())
@@ -63,11 +65,16 @@ def make_library(tech, outdir, name="dla_lib", prefix="dla_", cells=None, log=pr
     roles = {r: by_base[c] for r, c in ROLE_CELLS.items() if c in by_base}
     if len(roles) == len(ROLE_CELLS):
         writers.write_tech(p["tech"], st, {"lef": p["lef"], "gds": p["gds"], "verilog": p["verilog"]},
-                           roles, list(reversed(fills)))
+                           roles, list(reversed(fills)), spice_file=p["spice"])
     else:
         p.pop("tech")
     summary["fill"] = fills
     summary["test_cell"] = name + "_test"
     with open(p["json"], "w") as f:
         json.dump(summary, f, indent=2)
-    return {"st": st, "cells": built, "paths": p, "name": name}
+    res = {"st": st, "cells": built, "paths": p, "name": name}
+    if spice is not None:
+        from .. import spice_artifacts
+        res["spice"] = spice_artifacts.finalize_stdcell(res, outdir, spice)
+        p.update(res["spice"]["paths"])
+    return res

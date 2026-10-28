@@ -7,6 +7,15 @@
     python gen.py --tech out/dla_lib/dla_lib.tech.json decoder --bits 6   # block from the generated cells
     python gen.py --tech tech/ihp_sg13g2.json sram --rows 4 --cols 4      # -> out/sram_4x4/ (6T bitcell + array)
 
+    python gen.py --tech my.json --simulate auto sram --rows 4 --cols 4   # + PDK-model SPICE checks if configured
+    python gen.py --tech my.json --simulate require --spice-cmd "C:/ng/ngspice_con.exe" stdcell
+
+SPICE (optional, see tech/TECH_FILE.md "spice" section): every run also writes <name>.spice.json
+(provenance, VDD/T/corner, device counts, simulation status) and circuit schematics (*_schematic.svg).
+--simulate off (default) never runs a simulator; auto runs it when the tech file configures models and
+a simulator exists, else records "unavailable" and still succeeds; require fails unless the run passes.
+The simulator is --spice-cmd, else $DLA_SPICE, else ngspice on PATH.
+
 Steps: place + route -> block JSON / layout netlist / RTL / testbench
        -> exhaustive Python gate sim -> GDS -> metal connectivity -> metal/via DRC -> PNG
 The GDS steps need the `klayout` Python package (pip install klayout); without it use
@@ -19,7 +28,22 @@ import sys
 import time
 
 from dla import BLOCKS, write_all
+from dla.spice_artifacts import SpiceOptions, summary_line
 from dla.tech import load
+
+
+def spice_options(a):
+    return SpiceOptions(a.simulate, command=a.spice_cmd, timeout=a.spice_timeout, schematic=not a.no_schematic)
+
+
+def report_spice(out):
+    """Print the SPICE/schematic lines of a finalize_* result; returns False when the policy fails."""
+    p = out["paths"]
+    for k, label in (("spice", "netlist"), ("spice_json", "meta"), ("schematic", "schem"), ("schematic_bitcell", "schem")):
+        if k in p:
+            print("[%-5s] %s" % (label[:5], p[k]))
+    print(summary_line(out["sim"]))
+    return out["ok"]
 
 
 def main(argv=None):
@@ -30,6 +54,12 @@ def main(argv=None):
     ap.add_argument("--tech", help="tech JSON file (default: $DLA_TECH), see tech/TECH_FILE.md")
     ap.add_argument("--out", default="out", help="output root (a sub-folder per block is created)")
     ap.add_argument("--no-gds", action="store_true", help="stop after JSON/netlist/sim")
+    ap.add_argument("--simulate", choices=("off", "auto", "require"), default="off",
+                    help="SPICE simulation with the tech file's models: off (default), auto (skip with a "
+                         "recorded reason if unconfigured/unavailable) or require (fail unless it passes)")
+    ap.add_argument("--spice-cmd", help="simulator executable/command (default: $DLA_SPICE, then ngspice on PATH)")
+    ap.add_argument("--spice-timeout", type=float, default=120.0, help="per-run simulator timeout in seconds")
+    ap.add_argument("--no-schematic", action="store_true", help="skip the SVG circuit schematics")
     sub = ap.add_subparsers(dest="block", required=True)
 
     d = sub.add_parser("decoder", help="N -> 2^N decoder (NOR2 array + NAND2/NOR predecoders)")
@@ -62,13 +92,13 @@ def main(argv=None):
     if a.block == "decoder":
         blk = BLOCKS["decoder"](a.bits, enable=a.enable, name=a.name, tech=tech, channel=a.channel)
     outdir = os.path.join(a.out, blk.name)
-    paths = write_all(blk, outdir)
+    paths = write_all(blk, outdir, spice=spice_options(a))
     st = blk.stats()
     print("[gen ] %s: %d cells (+%d fill), %.1f x %.1f um, %d shapes, %d vias  (%.1fs)"
           % (blk.name, st["cells"], st["fill"], st["width_um"], st["height_um"],
              st["shapes"], st["vias"], time.time() - t0))
 
-    ok = True
+    ok = report_spice(blk.spice)
     if blk.meta.get("block") == "decoder":
         from dla.sim import check_decoder
         err = check_decoder(blk)
@@ -105,12 +135,14 @@ def sram(a):
     from dla.sram import make_sram
     name = a.name or "sram_%dx%d" % (a.rows, a.cols)
     outdir = os.path.join(a.out, name)
-    res = make_sram(a.tech or os.environ.get("DLA_TECH"), outdir, a.rows, a.cols, name, cr=a.cr, pr=a.pr)
+    res = make_sram(a.tech or os.environ.get("DLA_TECH"), outdir, a.rows, a.cols, name, cr=a.cr, pr=a.pr,
+                    spice=spice_options(a))
     st, p, cell, sz = res["st"], res["paths"], res["cell"], res["sizing"]
-    ok = not res["errors"]
+    heuristic_ok = not res["errors"]
     print("[sim ] heuristic ratio model (fixed MU_P/VM, not SPICE SNM/write-margin/delay/power): "
           "6T hold 0/1, read 0/1, write 0/1 + %dx%d array functional check: %s"
-          % (min(a.rows, 4), min(a.cols, 4), "PASS" if ok else "FAIL " + "; ".join(res["errors"])))
+          % (min(a.rows, 4), min(a.cols, 4), "PASS" if heuristic_ok else "FAIL " + "; ".join(res["errors"])))
+    ok = heuristic_ok & report_spice(res["spice"])        # the SPICE policy only affects the final result
     if a.no_gds:
         print("RESULT: %s (DRC / LVS / connectivity skipped)" % ("PASS" if ok else "FAIL"))
         return 0 if ok else 1
@@ -156,14 +188,15 @@ def stdcell(a):
     """Generate the library, then switch-level (inside make_library), DRC and LVS checks."""
     from dla.stdcell import make_library
     t0 = time.time()
-    lib = make_library(a.tech or os.environ.get("DLA_TECH"), os.path.join(a.out, a.name), a.name, a.prefix, a.cells)
+    lib = make_library(a.tech or os.environ.get("DLA_TECH"), os.path.join(a.out, a.name), a.name, a.prefix, a.cells,
+                       spice=spice_options(a))
     p, st = lib["paths"], lib["st"]
     print("[lib ] %s: %d cells -> %s  (%.1fs)" % (a.name, len(lib["cells"]), os.path.dirname(p["gds"]), time.time() - t0))
     print("[sim ] switch-level truth tables: PASS")
-    ok = True
+    ok = report_spice(lib["spice"])
     if a.no_gds:
-        print("RESULT: PASS (DRC / LVS skipped)")
-        return 0
+        print("RESULT: %s (DRC / LVS skipped)" % ("PASS" if ok else "FAIL"))
+        return 0 if ok else 1
     try:
         from dla.stdcell import check
     except ImportError:

@@ -1050,7 +1050,7 @@ def _log(*a):
 
 
 def make_sram(tech, outdir, rows=4, cols=4, name=None, cr=None, pr=None, l=None,
-              w_pu=None, w_pg=None, w_pd=None, log=_log):
+              w_pu=None, w_pg=None, w_pd=None, log=_log, spice=None):
     """Size, lay out, route and write a rows x cols 6T SRAM. Returns a dict with the cell, the
     arrays, the file paths and the switch-level results (``errors``: empty list = pass)."""
     _check_count("rows", rows)
@@ -1083,5 +1083,10 @@ def make_sram(tech, outdir, rows=4, cols=4, name=None, cr=None, pr=None, l=None,
         json.dump(sram_json(st, cell, arr, sz, metrics), f, indent=1)
     log("[gen ] %s: %dx%d bits, bitcell %.3f x %.3f um (%d sites), array %.3f x %.3f um  (%.1fs)"
         % (name, rows, cols, cell.width, st.row_h, cell.info["sites"], arr.width, arr.height, time.time() - t0))
-    return {"st": st, "cell": cell, "array": arr, "array2x2": two, "sizing": sz, "paths": p, "name": name,
-            "errors": errors, "metrics": metrics}
+    res = {"st": st, "cell": cell, "array": arr, "array2x2": two, "sizing": sz, "paths": p, "name": name,
+           "errors": errors, "metrics": metrics}
+    if spice is not None:            # dla.spice_artifacts.SpiceOptions: metadata JSON, schematics, opt-in simulation
+        from . import spice_artifacts
+        res["spice"] = spice_artifacts.finalize_sram(res, outdir, spice)
+        p.update(res["spice"]["paths"])
+    return res
