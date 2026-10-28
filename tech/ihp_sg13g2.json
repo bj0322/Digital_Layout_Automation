@@ -21,6 +21,7 @@
     "boundary": [189, 4]
   },
   "rules": {"via_stack": true},
+  "sram": {"min_nmos_width": 0.15, "min_pmos_width": 0.15, "cr": 1.5, "pr": 1.0},
   "stdcell": {
     "comment": "Front-end rules for generating std cells (python gen.py stdcell). Values from the IHP SG13G2 design rules.",
     "row_height": 3.78, "site_width": 0.48, "site_name": "CoreSite", "rail_width": 0.44,

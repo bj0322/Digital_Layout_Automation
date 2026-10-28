@@ -99,7 +99,7 @@ def drc(gds, topname, st):
 
 
 # ----------------------------------------------------------------------------- LVS
-def lvs(gds, cl, st, spice_text):
+def lvs(gds, cl, st, spice_text, stats=None):
     """Extract one cell and compare it with its reference SPICE subcircuit. Returns (ok, message)."""
     ly = db.Layout()
     ly.read(gds)
@@ -137,6 +137,8 @@ def lvs(gds, cl, st, spice_text):
     l2n.connect(ptap, psd)
     l2n.extract_netlist()
     lay_nl = l2n.netlist()
+    if stats is not None:       # device counts before / after merging parallel devices
+        stats["raw"] = sum(1 for c in lay_nl.each_circuit() for _ in c.each_device())
     lay_nl.combine_devices()
     lay_nl.make_top_level_pins()
     lay_nl.purge()
@@ -156,6 +158,8 @@ def lvs(gds, cl, st, spice_text):
     xref = db.NetlistCrossReference()
     ok = cmp.compare(lay_nl, ref, xref)
     msg = "%d devices" % sum(1 for c in lay_nl.each_circuit() for _ in c.each_device())
+    if stats is not None:
+        stats["combined"] = int(msg.split()[0])
     if not ok:
         return False, msg + ", netlists differ"
     # labelled layout nets must map onto the reference nets of the same name

@@ -42,6 +42,29 @@ def _r8(v):
     return bytes([sign | (e + 64)]) + m.to_bytes(7, "big")
 
 
+ORIENTS = ("R0", "MX", "MY", "R180")
+
+
+def orient_origin(orient, x, yb, W, H):
+    """Reference origin of a cell with box [0,W]x[0,H] placed with its lower-left box corner at (x, yb)."""
+    if orient == "R0":
+        return x, yb
+    if orient == "MX":                 # vertical flip   (u, v) -> (x + u, yb + H - v)
+        return x, yb + H
+    if orient == "MY":                 # horizontal flip (u, v) -> (x + W - u, yb + v)
+        return x + W, yb
+    if orient == "R180":               # both            (u, v) -> (x + W - u, yb + H - v)
+        return x + W, yb + H
+    raise ValueError("orientation %r (expected one of %s)" % (orient, ", ".join(ORIENTS)))
+
+
+def orient_point(orient, u, v, x, yb, W, H):
+    """Where the cell point (u, v) lands for ``orient`` placed at lower-left (x, yb)."""
+    fx, fy = orient in ("MY", "R180"), orient in ("MX", "R180")
+    orient_origin(orient, x, yb, W, H)         # validates
+    return (x + (W - u if fx else u), yb + (H - v if fy else v))
+
+
 class GdsWriter:
     """Boxes, texts and (optionally mirrored) cell references."""
 
@@ -68,10 +91,23 @@ class GdsWriter:
         self.out += [_rec(0x0C, 0x00), _rec(0x0D, 0x02, _i2(ld[0])), _rec(0x16, 0x02, _i2(ld[1])),
                      self._xy([(x, y)]), _rec(0x19, 0x06, _s(s)), _rec(0x11, 0x00)]
 
-    def sref(self, name, x, y, mirror_x=False):
+    def sref(self, name, x, y, mirror_x=False, orient=None, size=None):
+        """Cell reference. Legacy form: (x, y) is the reference origin, mirror_x flips about x.
+
+        With ``orient`` in R0 / MX / MY / R180 and ``size=(W, H)`` of the cell's [0,W]x[0,H]
+        box, (x, y) is the lower-left corner of the placed box (see :func:`orient_origin`).
+        """
+        if orient is not None:
+            x, y = orient_origin(orient, x, y, *size)
+            mirror_x = orient in ("MX", "MY")
+            angle = 180.0 if orient in ("MY", "R180") else 0.0
+        else:
+            angle = 0.0
         self.out += [_rec(0x0A, 0x00), _rec(0x12, 0x06, _s(name))]
-        if mirror_x:
-            self.out.append(_rec(0x1A, 0x01, struct.pack(">H", 0x8000)))
+        if mirror_x or angle:
+            self.out.append(_rec(0x1A, 0x01, struct.pack(">H", 0x8000 if mirror_x else 0)))
+        if angle:
+            self.out.append(_rec(0x1C, 0x05, _r8(angle)))
         self.out += [self._xy([(x, y)]), _rec(0x11, 0x00)]
 
     def end(self):

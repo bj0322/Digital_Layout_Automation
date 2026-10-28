@@ -28,6 +28,9 @@ python gen.py --tech tech/ihp_sg13g2.json decoder --bits 8 --enable   # -> out/d
 export DLA_TECH=tech/ihp_sg13g2.json
 python gen.py decoder --bits 10 --name row_dec
 python gen.py --tech tech/ihp_sg13g2.json stdcell                     # own std cells -> out/dla_lib/
+python gen.py --tech tech/ihp_sg13g2.json sram --rows 4 --cols 4      # 6T bitcell + array -> out/sram_4x4/
+# SRAM sizing/[sim ] = heuristic ratio model (fixed MU_P/VM): minimum legal widths meeting CR/PR targets.
+# SNM, write margin, delay and power still need SPICE with the PDK device models.
 python gen.py --tech out/dla_lib/dla_lib.tech.json decoder --bits 6   # decoder from those cells
 python -m pytest -q tests                                             # 31 tests
 ```
