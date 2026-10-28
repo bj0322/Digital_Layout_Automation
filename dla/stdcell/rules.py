@@ -113,24 +113,25 @@ class StdTech:
         H = self.row_h
         self.tap_h = snap_up(max(c + 2 * ca, r["activ_width"]), 2 * g)
         self.rail_w = max(self.rail_w, c + 2 * ee, self.m1.width)
-        ptap_imp = self.tap_h / 2 + r["pimp_enc_ptap"]                  # p-implant half height on the VSS tap
-        # NMOS band: above the VSS tap
+        pcs = r["pimp_cont_space"]
+        ptap_imp = max(self.tap_h / 2 + r["pimp_enc_ptap"], c / 2 + pcs)  # p-implant half height on the VSS tap
+        # NMOS band: above the VSS tap (contacts on n+ active sit >= ca inside the band)
         nb = max(self.tap_h / 2 + r["activ_space"],
-                 ptap_imp + max(r["pimp_space_ndiff"], r["pimp_space_gate"]),
+                 ptap_imp + max(r["pimp_space_ndiff"], r["pimp_space_gate"], pcs - ca),
                  self.tap_h / 2 + r["poly_activ_space"] + r["poly_endcap"])
         self.nb = snap_up(nb, g)
         self.nt = round(self.nb + self.wn, 6)
-        # PMOS band: below the VDD tap; the p-implant stops short of the n+ tap
-        self.pimp_top = round(H - self.tap_h / 2 - r["pimp_space_ntap"], 6)
+        # PMOS band: below the VDD tap; the p-implant stops short of the n+ tap and its contacts
+        self.pimp_top = round(min(H - self.tap_h / 2 - r["pimp_space_ntap"], H - c / 2 - pcs), 6)
         pt = H - max(self.tap_h / 2 + r["activ_space"],
-                     H - self.pimp_top + max(r["pimp_enc_pdiff"], r["pimp_enc_gate"]),
+                     H - self.pimp_top + max(r["pimp_enc_pdiff"], r["pimp_enc_gate"], pcs - ca),
                      self.tap_h / 2 + r["poly_activ_space"] + r["poly_endcap"])
         self.pt = snap_dn(pt, g)
         self.pb = round(self.pt - self.wp, 6)
         # well / implant edge between the bands
         lo_w, hi_w = self.nt + r["nwell_space_ndiff"], self.pb - r["nwell_enc_pdiff"]
-        lo_i = self.nt + max(r["pimp_space_ndiff"], r["pimp_space_gate"])
-        hi_i = self.pb - max(r["pimp_enc_pdiff"], r["pimp_enc_gate"])
+        lo_i = self.nt + max(r["pimp_space_ndiff"], r["pimp_space_gate"], pcs - ca)
+        hi_i = self.pb - max(r["pimp_enc_pdiff"], r["pimp_enc_gate"], pcs - ca)
         if lo_w > hi_w + EPS or lo_i > hi_i + EPS:
             raise ValueError("tech %s: row height %.3f too small for wn=%.3f, wp=%.3f "
                              "(no room for the n-well / implant edge)" % (self.name, H, self.wn, self.wp))
@@ -140,9 +141,10 @@ class StdTech:
         self.nwell_top = round(H + self.tap_h / 2 + r["nwell_enc_ntap"], 6)
         self.nwell_x = r["nwell_enc_ntap"]
         self.ptap_imp = round(ptap_imp, 6)
-        # p-implant must cover p+ active / gates up to the cell edge (abutting cells merge)
+        # p-implant must cover p+ active / gates / contacts up to the cell edge (abutting cells merge)
         self.amargin = snap_up(r["activ_space"] / 2, g)               # active to cell edge
-        self.pimp_x = snap_up(max(r["pimp_enc_ptap"], r["pimp_enc_pdiff"] - self.amargin), g)
+        self.pimp_x = snap_up(max(r["pimp_enc_ptap"], r["pimp_enc_pdiff"] - self.amargin,
+                                  pcs - ca - self.amargin), g)
         # poly contact window in the channel (contact centre y)
         self.pc = snap_up(c + 2 * r["cont_poly_enc"], 2 * g)          # poly pad (square)
         lo = max(self.nt + r["polycont_activ_space"] + c / 2, self.nt + r["poly_activ_space"] + self.pc / 2)

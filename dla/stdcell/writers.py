@@ -129,7 +129,8 @@ def write_lef(path, st, cells):
             if p in (st.vdd, st.vss):
                 use, d = ("POWER" if p == st.vdd else "GROUND"), "INOUT"
             else:
-                use, d = "SIGNAL", "OUTPUT" if p == "Y" else "INPUT"
+                outs = set(getattr(cl.netlist, "outputs", ("Y",))) if cl.netlist else {"Y"}
+                use, d = "SIGNAL", "OUTPUT" if p in outs else "INPUT"
             L += ["  PIN %s" % p, "    DIRECTION %s ;" % d, "    USE %s ;" % use]
             if use != "SIGNAL":
                 L.append("    SHAPE ABUTMENT ;")
